@@ -1,0 +1,173 @@
+"""Centralised, environment-driven application configuration.
+
+All tunables live here so that nothing (credentials, model names, thresholds,
+scoring weights) is hardcoded in business logic. Import the singleton via
+``get_settings()`` which is cached for the process lifetime.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # --- Application ---
+    app_name: str = "AI Personalized News Feed"
+    environment: Literal["development", "staging", "production"] = "development"
+    debug: bool = True
+    log_level: str = "INFO"
+    api_v1_prefix: str = "/api/v1"
+    cors_allow_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+
+    # --- Security ---
+    secret_key: str = "change-me-in-production"
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = 100
+    rate_limit_window_seconds: int = 60
+
+    # --- PostgreSQL ---
+    database_url: str = "postgresql+psycopg://newsfeed:newsfeed@localhost:5432/newsfeed"
+    db_pool_size: int = 10
+    db_max_overflow: int = 5
+    db_echo: bool = False
+
+    # --- Redis ---
+    redis_url: str = "redis://localhost:6379/0"
+    celery_broker_url: str = "redis://localhost:6379/1"
+    celery_result_backend: str = "redis://localhost:6379/2"
+
+    # --- Qdrant ---
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str | None = None
+    qdrant_collection: str = "articles"
+    qdrant_vector_size: int = 384
+
+    # --- Embeddings ---
+    embedding_provider: str = "sentence_transformer"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_batch_size: int = 32
+
+    # --- LLM ---
+    llm_provider: str = "openai"
+    llm_api_key: str | None = None
+    llm_base_url: str = "https://api.openai.com/v1"
+    llm_model: str = "gpt-4o-mini"
+    llm_timeout_seconds: int = 30
+    llm_max_retries: int = 3
+
+    # --- News ingestion ---
+    news_rss_feeds: list[str] = Field(default_factory=list)
+    news_api_enabled: bool = False
+    news_api_key: str | None = None
+    ingest_max_articles_per_feed: int = 50
+
+    # --- Deduplication ---
+    semantic_duplicate_threshold: float = 0.90
+    dedup_top_k: int = 10
+
+    # --- Topic taxonomy ---
+    topic_taxonomy: list[str] = Field(
+        default_factory=lambda: [
+            "Artificial Intelligence",
+            "Software Engineering",
+            "Cloud",
+            "Cybersecurity",
+            "Startups",
+            "Business",
+            "Finance",
+            "Science",
+            "Technology",
+            "Politics",
+            "World",
+            "Sports",
+            "Entertainment",
+        ]
+    )
+
+    # --- Interaction weights ---
+    interaction_weight_view: float = 1.0
+    interaction_weight_click: float = 2.0
+    interaction_weight_like: float = 3.0
+    interaction_weight_save: float = 4.0
+    interaction_weight_share: float = 4.0
+    interaction_weight_skip: float = -1.0
+    interaction_weight_dislike: float = -4.0
+
+    # --- Ranking weights ---
+    rank_weight_semantic: float = 0.55
+    rank_weight_freshness: float = 0.20
+    rank_weight_popularity: float = 0.10
+    rank_weight_source_quality: float = 0.10
+    rank_weight_diversity: float = 0.05
+    freshness_decay_hours: float = 24.0
+    feed_default_limit: int = 20
+    feed_max_limit: int = 50
+    feed_candidate_pool: int = 200
+
+    # --- Feed cache ---
+    feed_cache_ttl_seconds: int = 300
+
+    # --- Celery task policy ---
+    task_max_retries: int = 3
+    task_retry_backoff_seconds: int = 10
+
+    @field_validator("log_level")
+    @classmethod
+    def _upper_log_level(cls, v: str) -> str:
+        return v.upper()
+
+    @field_validator("qdrant_api_key", "llm_api_key", "news_api_key", mode="before")
+    @classmethod
+    def _empty_str_to_none(cls, v: object) -> object:
+        # An unset env var is often written as `KEY=` -> treat "" as absent.
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
+    @property
+    def interaction_weights(self) -> dict[str, float]:
+        """Map of InteractionType name -> weight, sourced entirely from config."""
+        return {
+            "VIEW": self.interaction_weight_view,
+            "CLICK": self.interaction_weight_click,
+            "LIKE": self.interaction_weight_like,
+            "SAVE": self.interaction_weight_save,
+            "SHARE": self.interaction_weight_share,
+            "SKIP": self.interaction_weight_skip,
+            "DISLIKE": self.interaction_weight_dislike,
+        }
+
+    @property
+    def ranking_weights(self) -> dict[str, float]:
+        return {
+            "semantic": self.rank_weight_semantic,
+            "freshness": self.rank_weight_freshness,
+            "popularity": self.rank_weight_popularity,
+            "source_quality": self.rank_weight_source_quality,
+            "diversity": self.rank_weight_diversity,
+        }
+
+    @property
+    def sync_database_url(self) -> str:
+        """Sync SQLAlchemy URL for Alembic. psycopg3 supports sync + async."""
+        return self.database_url
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
