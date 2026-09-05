@@ -8,8 +8,8 @@ feed over a REST API.
 
 Built as a **modular monolith with background workers** — not microservices.
 
-> **Build status:** Phase 1 complete (foundation: config, DB, models, Alembic,
-> FastAPI app, health/metrics, Docker Compose, CI). See the roadmap below.
+> **Build status:** Phases 1–2 complete (foundation + user/article/interaction
+> APIs over API→Service→Repository layers). See the roadmap below.
 
 ---
 
@@ -65,9 +65,9 @@ app/
 ├── core/                  # config, logging, exceptions, security seam, metrics
 ├── db/                    # async engine/session, declarative base, models
 │   └── models/            # user, interest, story, article, interaction, processing
-├── schemas/               # Pydantic request/response models  (Phase 2+)
-├── repositories/          # data-access layer                  (Phase 2+)
-├── services/              # domain logic                       (Phase 2+)
+├── schemas/               # Pydantic request/response models
+├── repositories/          # data-access layer (holds the UoW session, never commits)
+├── services/              # domain logic (raises typed AppError subclasses)
 ├── ai/                    # embeddings + llm providers, summarizer, classifier (Phase 4/5)
 ├── vector/                # Qdrant client, collections, search  (Phase 4)
 ├── cache/                 # Redis + feed cache                  (Phase 3/7)
@@ -164,7 +164,9 @@ schema authority.
 
 ---
 
-## 8. API (Phase 1)
+## 8. API
+
+### Operational
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -173,14 +175,45 @@ schema authority.
 | GET | `/metrics` | Prometheus exposition |
 | GET | `/docs` | OpenAPI UI |
 
-```bash
-curl -s localhost:8000/health
-curl -s localhost:8000/ready | jq
-curl -s localhost:8000/metrics | head
-```
+### v1 (`/api/v1`)
 
-Endpoints for users, interests, articles, interactions, feed and admin ingest
-arrive in later phases.
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/users` | Create a user (`201`, `409` on duplicate email) |
+| GET | `/users/{user_id}` | Fetch a user (`404` if absent) |
+| POST | `/users/{user_id}/interests` | Add/replace interest weights (idempotent upsert) |
+| GET | `/users/{user_id}/interests` | List a user's interests |
+| GET | `/articles` | Cursor-paginated list; filters: `source`, `status`, `limit`, `cursor` |
+| GET | `/articles/{article_id}` | Article detail |
+| POST | `/interactions` | Record VIEW/CLICK/LIKE/DISLIKE/SAVE/SKIP/SHARE (`404` if user/article unknown) |
+
+*Coming:* `POST /api/v1/admin/ingest` (Phase 3), `GET /api/v1/feed` (Phase 6).
+
+All errors share one envelope: `{"error": {"code": "...", "message": "..."}}`.
+Every response carries `X-Request-Id`.
+
+### Example curl
+
+```bash
+API=http://localhost:8000/api/v1
+
+# create a user
+USER=$(curl -s -XPOST $API/users -H 'content-type: application/json' \
+  -d '{"email":"ada@example.com","name":"Ada"}')
+UID=$(echo "$USER" | jq -r .id)
+
+# assign interests (weights are configurable signals, not hardcoded)
+curl -s -XPOST $API/users/$UID/interests -H 'content-type: application/json' \
+  -d '{"items":[{"name":"Artificial Intelligence","weight":3},{"name":"Cloud","weight":1.5}]}'
+
+# page through articles
+curl -s "$API/articles?limit=20"
+curl -s "$API/articles?limit=20&cursor=<next_cursor-from-previous-response>"
+
+# record an interaction
+curl -s -XPOST $API/interactions -H 'content-type: application/json' \
+  -d "{\"user_id\":\"$UID\",\"article_id\":\"<article-uuid>\",\"interaction_type\":\"LIKE\"}"
+```
 
 ---
 
@@ -201,9 +234,16 @@ pytest -q                     # all
 pytest --cov=app              # with coverage
 ```
 
-Unit tests cover config, model metadata and health/metrics wiring today;
-scoring, dedup, profile-building, cursor codec and full integration tests are
-added alongside their features.
+- **Unit** (`tests/unit/`, no infra): config, model metadata, cursor
+  encode/decode, interaction weighting.
+- **Integration** (`tests/integration/`, real PostgreSQL): user CRUD +
+  conflicts, interest upsert, article pagination (walks every row, no overlap),
+  interaction persistence + validation. Each test runs in a transaction that is
+  rolled back. Set `TEST_DATABASE_URL`; the suite skips (does not fail) if it is
+  unreachable.
+
+Scoring, dedup, profile-building and cache tests are added alongside their
+features in later phases.
 
 ---
 
@@ -212,7 +252,7 @@ added alongside their features.
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | Foundation: config, DB, models, Alembic, FastAPI, health, Docker, CI | ✅ |
-| 2 | User / article / interaction APIs (service + repository layers) | ⏳ |
+| 2 | User / article / interaction APIs (service + repository layers, cursor pagination) | ✅ |
 | 3 | RSS ingestion, Celery, Redis | ⏳ |
 | 4 | Qdrant, embeddings, semantic deduplication | ⏳ |
 | 5 | LLM summaries + topic classification | ⏳ |

@@ -1,0 +1,70 @@
+"""Integration-test fixtures backed by a real PostgreSQL database.
+
+Set ``TEST_DATABASE_URL`` to point at a throwaway database. If it is not
+reachable, the integration tests are skipped rather than failed so the unit
+suite still runs anywhere.
+"""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.db.models import Base
+from app.db.session import get_db_session
+from app.main import create_app
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg://newsfeed:newsfeed@localhost:5432/newsfeed_test",
+)
+
+
+@pytest_asyncio.fixture(scope="session")
+async def test_engine():
+    engine = create_async_engine(TEST_DATABASE_URL, pool_pre_ping=True)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as exc:  # noqa: BLE001
+        await engine.dispose()
+        pytest.skip(f"Test database unavailable ({exc})", allow_module_level=True)
+    yield engine
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(test_engine):
+    """Each test runs inside a transaction that is rolled back afterwards."""
+    conn = await test_engine.connect()
+    trans = await conn.begin()
+    factory = async_sessionmaker(bind=conn, expire_on_commit=False, autoflush=False)
+    session = factory()
+    try:
+        yield session
+    finally:
+        await session.close()
+        await trans.rollback()
+        await conn.close()
+
+
+@pytest_asyncio.fixture
+async def client(db_session) -> AsyncClient:
+    app = create_app()
+
+    async def _override_session():
+        # No commit: the outer fixture transaction is rolled back for isolation.
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = _override_session
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+    app.dependency_overrides.clear()
