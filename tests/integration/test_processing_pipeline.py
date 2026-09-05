@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import uuid
 
 import pytest
@@ -7,9 +8,23 @@ import pytest
 from app.db.models.article import Article, ArticleProcessingStatus
 from app.db.models.processing import ProcessingJobStatus
 from app.repositories.processing_repository import ProcessingRepository
+from app.workers import processing_tasks
 from app.workers.processing_tasks import _record_failure, _run_pipeline
+from tests._fakes import FakeEmbeddingProvider, FakeVectorStore
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _stub_ai(monkeypatch):
+    store = FakeVectorStore()
+
+    @contextlib.asynccontextmanager
+    async def _vs():
+        yield store
+
+    monkeypatch.setattr(processing_tasks, "vector_store", _vs)
+    monkeypatch.setattr(processing_tasks, "get_embedding_provider", FakeEmbeddingProvider)
 
 
 async def _article_with_job(db_session) -> Article:
@@ -29,6 +44,9 @@ async def test_pipeline_advances_state_to_completed(db_session):
     await db_session.flush()
     await db_session.refresh(article)
     assert article.processing_status == ArticleProcessingStatus.COMPLETED
+    assert article.story_id is not None
+    assert article.embedding_reference == str(article.id)
+    assert result["story_id"] == str(article.story_id)
     job = await ProcessingRepository(db_session).get_latest_job(article.id)
     assert job.status == ProcessingJobStatus.COMPLETED
     assert job.started_at is not None and job.completed_at is not None

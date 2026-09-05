@@ -22,6 +22,7 @@ TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql+psycopg://newsfeed:newsfeed@localhost:5432/newsfeed_test",
 )
+TEST_QDRANT_URL = os.environ.get("TEST_QDRANT_URL", "http://localhost:6333")
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -53,6 +54,33 @@ async def db_session(test_engine):
         await session.close()
         await trans.rollback()
         await conn.close()
+
+
+@pytest_asyncio.fixture
+async def qdrant_store():
+    """A throwaway Qdrant collection (skips the test if Qdrant is unreachable)."""
+    from uuid import uuid4
+
+    from qdrant_client import AsyncQdrantClient
+
+    from app.vector.collections import CollectionSpec
+    from app.vector.search import QdrantVectorStore
+
+    client = AsyncQdrantClient(url=TEST_QDRANT_URL, check_compatibility=False, timeout=5)
+    spec = CollectionSpec(name=f"test_{uuid4().hex}", vector_size=3)
+    store = QdrantVectorStore(client, spec)
+    try:
+        await store.ensure_collection()
+    except Exception as exc:  # noqa: BLE001
+        await client.close()
+        pytest.skip(f"Qdrant unavailable ({exc})")
+    try:
+        yield store
+    finally:
+        try:
+            await client.delete_collection(spec.name)
+        finally:
+            await client.close()
 
 
 @pytest_asyncio.fixture

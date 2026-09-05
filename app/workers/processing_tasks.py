@@ -1,23 +1,28 @@
 """Per-article AI processing pipeline task.
 
-Phase 3 wires the task lifecycle — idempotency, state transitions, exponential
-backoff, failure accounting. The pipeline body (clean → embed → semantic dedup →
-classify → summarize) is filled in Phases 4–5; today it is a no-op that just
-advances the job/article state so the machinery is testable end to end.
+Lifecycle (idempotency, state transitions, exponential backoff, failure
+accounting) plus the Phase 4 body: clean → embed → semantic dedup into a story.
+Topic classification and summarization are added in Phase 5.
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.embeddings import build_embedding_text, get_embedding_provider
 from app.core.config import get_settings
 from app.core.exceptions import ServiceUnavailableError, UpstreamError
 from app.core.logging import bind_context, clear_context, get_logger
 from app.core.metrics import articles_processed_total, worker_failures_total
 from app.db.models.processing import ProcessingJobStatus
+from app.repositories.article_repository import ArticleRepository
 from app.repositories.processing_repository import ProcessingRepository
+from app.repositories.story_repository import StoryRepository
+from app.services.deduplication_service import DeduplicationService
+from app.vector.client import vector_store
 from app.workers.celery_app import celery_app
 from app.workers.runtime import run_with_session
 
@@ -30,6 +35,7 @@ RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
     ServiceUnavailableError,
     ConnectionError,
     TimeoutError,
+    httpx.HTTPError,
 )
 
 _settings = get_settings()
@@ -47,18 +53,41 @@ async def _run_pipeline(session: AsyncSession, article_id: UUID) -> dict[str, st
     if job.status == ProcessingJobStatus.COMPLETED:
         return {"status": "already_completed", "article_id": str(article_id)}
 
+    articles = ArticleRepository(session)
+    article = await articles.get(article_id)
+    if article is None:
+        raise LookupError(f"article {article_id} not found")  # permanent
+
     await repo.mark_processing(job)
 
-    # --- Phase 4/5: pipeline steps land here ---
-    #   text = clean(article)
-    #   vector = await embed(text)
-    #   story = await deduplicate(article, vector)
-    #   topics = await classify(text)
-    #   summary = await summarize(text)
-    logger.info("process_article_pipeline", article_id=str(article_id), pipeline="noop")
+    text = build_embedding_text(
+        title=article.title, description=article.description, content=article.content
+    )
+
+    try:
+        async with vector_store() as store:
+            dedup = DeduplicationService(
+                articles, StoryRepository(session), store, get_embedding_provider()
+            )
+            dedup_result = await dedup.deduplicate(article, text=text)
+    except (httpx.HTTPError, ConnectionError, TimeoutError, OSError) as exc:
+        raise UpstreamError(f"embedding/vector failure: {exc}") from exc
+
+    # --- Phase 5: topic classification + summarization land here ---
 
     await repo.mark_completed(job)
-    return {"status": "completed", "article_id": str(article_id)}
+    logger.info(
+        "process_article_pipeline",
+        article_id=str(article_id),
+        story_id=str(dedup_result.story_id),
+        duplicate=dedup_result.is_duplicate,
+    )
+    return {
+        "status": "completed",
+        "article_id": str(article_id),
+        "story_id": str(dedup_result.story_id),
+        "duplicate": str(dedup_result.is_duplicate),
+    }
 
 
 async def _record_failure(

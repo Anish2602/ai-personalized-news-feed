@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     embedding_provider: str = "sentence_transformer"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_batch_size: int = 32
+    embedding_max_chars: int = 2000
 
     # --- LLM ---
     llm_provider: str = "openai"

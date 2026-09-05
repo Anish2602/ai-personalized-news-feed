@@ -17,6 +17,16 @@ class ArticleRepository(BaseRepository):
         result = await self.session.execute(select(Article).where(Article.url == url))
         return result.scalar_one_or_none()
 
+    async def assign_story(self, article_id: UUID, story_id: UUID) -> None:
+        article = await self.session.get(Article, article_id)
+        if article is not None:
+            article.story_id = story_id
+
+    async def set_embedding_reference(self, article_id: UUID, reference: str) -> None:
+        article = await self.session.get(Article, article_id)
+        if article is not None:
+            article.embedding_reference = reference
+
     async def list_page(
         self,
         *,

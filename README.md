@@ -8,8 +8,9 @@ feed over a REST API.
 
 Built as a **modular monolith with background workers** — not microservices.
 
-> **Build status:** Phases 1–3 complete (foundation, user/article/interaction
-> APIs, RSS ingestion + Celery workers + Redis). See the roadmap below.
+> **Build status:** Phases 1–4 complete (foundation, APIs, RSS ingestion +
+> Celery, embeddings + Qdrant + semantic deduplication into stories). See the
+> roadmap below.
 
 ---
 
@@ -68,9 +69,9 @@ app/
 ├── schemas/               # Pydantic request/response models
 ├── repositories/          # data-access layer (holds the UoW session, never commits)
 ├── services/              # domain logic (raises typed AppError subclasses)
-├── ai/                    # embeddings + llm providers, summarizer, classifier (Phase 4/5)
-├── vector/                # Qdrant client, collections, search  (Phase 4)
-├── cache/                 # Redis + feed cache                  (Phase 3/7)
+├── ai/                    # embeddings (provider ABC + sentence-transformers); llm/summarizer/classifier (Phase 5)
+├── vector/                # Qdrant client, collection spec, search wrapper
+├── cache/                 # Redis client (feed cache in Phase 7)
 ├── workers/               # celery app + task modules           (Phase 3+)
 ├── ingestion/             # RSS/news sources + normalizer       (Phase 3)
 └── ranking/               # scorer, freshness, diversity        (Phase 6/7)
@@ -134,7 +135,15 @@ cp .env.example .env            # point hosts at localhost
 docker compose up -d postgres redis qdrant
 alembic upgrade head
 uvicorn app.main:app --reload
+
+# in another shell — the Celery worker
+celery -A app.workers.celery_app.celery_app worker --beat --loglevel=INFO
 ```
+
+> **macOS note:** PyTorch + the Celery `prefork` pool crash on `fork()`. For a
+> native worker on macOS use `--pool=solo` (or `--pool=threads`), or export
+> `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES`. The Docker worker (Linux) is
+> unaffected.
 
 ---
 
@@ -242,14 +251,16 @@ pytest --cov=app              # with coverage
 
 - **Unit** (`tests/unit/`, no infra): config, model metadata, cursor
   encode/decode, interaction weighting, RSS entry mapping, article normalizer,
-  retry backoff.
-- **Integration** (`tests/integration/`, real PostgreSQL): user CRUD +
-  conflicts, interest upsert, article pagination (walks every row, no overlap),
-  interaction persistence + validation, ingestion (new/duplicate/invalid counts,
-  idempotency, source isolation), processing-job state machine, `POST
-  /admin/ingest` sync + async. Each test runs in a transaction that is rolled
-  back. Set `TEST_DATABASE_URL`; the suite skips (does not fail) if it is
-  unreachable.
+  retry backoff, embedding provider (mocked model), **semantic dedup logic**
+  (empty index, attach-to-story, threshold boundary, neighbour back-fill).
+- **Integration** (`tests/integration/`, real PostgreSQL + Qdrant): user CRUD +
+  conflicts, interest upsert, article pagination, interaction persistence,
+  ingestion (counts, idempotency, source isolation), processing pipeline (state
+  machine + story assignment + embedding reference), **semantic dedup against a
+  live Qdrant collection** (first article → story, near-duplicate → same story,
+  unrelated → new story), `POST /admin/ingest` sync + async. Each test runs in a
+  rolled-back transaction; Qdrant tests use a throwaway collection. Set
+  `TEST_DATABASE_URL` / `TEST_QDRANT_URL`; tests skip (don't fail) if unreachable.
 
 Scoring, dedup, profile-building and cache tests are added alongside their
 features in later phases.
@@ -296,13 +307,48 @@ other sources still run.
 > summarize) is a no-op in Phase 3 — it only advances job/article state. Phases
 > 4–5 fill it in.
 
+### Embeddings
+
+`EmbeddingProvider` ABC → `SentenceTransformerEmbeddingProvider` (local, offline,
+model from `EMBEDDING_MODEL` — **not hardcoded**). The model loads lazily once
+per process and `encode` runs in a worker thread. `get_embedding_provider()`
+selects the implementation from `EMBEDDING_PROVIDER`. Vectors are L2-normalized
+and stored in Qdrant (`QDRANT_COLLECTION`, cosine distance,
+`QDRANT_VECTOR_SIZE` must match the model — 384 for MiniLM-L6-v2).
+
 ### Two-stage deduplication
 
-1. **URL-level (Phase 3, here):** cheap; prevents re-fetching/re-embedding
-   articles we already have.
-2. **Semantic (Phase 4):** embed → Qdrant top-K → threshold
-   (`SEMANTIC_DUPLICATE_THRESHOLD`, configurable, *evaluate against real data*)
-   → attach to an existing `Story` or create a new one.
+1. **URL-level (stage 1):** cheap; prevents re-fetching/re-embedding articles we
+   already have.
+2. **Semantic (stage 2):** `build_embedding_text(article)` → embed → Qdrant
+   nearest-neighbour search (top `DEDUP_TOP_K`, excluding self) → if the best
+   cosine similarity ≥ `SEMANTIC_DUPLICATE_THRESHOLD` attach the article to that
+   neighbour's `Story` (creating one and back-filling the neighbour if it has
+   none), otherwise open a new `Story`. The article's vector is then upserted so
+   it can match future arrivals.
+
+**PostgreSQL is the source of truth for `story_id`.** The Qdrant payload keeps a
+copy for debugging but grouping decisions always re-read the neighbour's current
+story from the database — no stale-payload merges.
+
+> `SEMANTIC_DUPLICATE_THRESHOLD=0.90` is a **starting point, not a proven
+> optimum**. It trades false merges (too low) against missed duplicates (too
+> high) and is model-dependent — evaluate it against a labelled sample of your
+> real feeds before trusting it.
+
+### `process_article` pipeline (Phase 4)
+
+```
+mark PROCESSING
+  → build_embedding_text(title + description|content, truncated to EMBEDDING_MAX_CHARS)
+  → embed
+  → semantic dedup → assign story_id + embedding_reference, upsert vector
+  → (Phase 5: classify + summarize)
+mark COMPLETED
+```
+
+Embedding/Qdrant/network failures are wrapped as `UpstreamError` → retried with
+exponential backoff; a missing article is a permanent failure.
 
 ### Local end-to-end
 
@@ -322,7 +368,7 @@ docker compose exec postgres psql -U newsfeed -d newsfeed \
 | 1 | Foundation: config, DB, models, Alembic, FastAPI, health, Docker, CI | ✅ |
 | 2 | User / article / interaction APIs (service + repository layers, cursor pagination) | ✅ |
 | 3 | RSS ingestion (idempotent), Celery workers, Redis, `POST /admin/ingest` | ✅ |
-| 4 | Qdrant, embeddings, semantic deduplication | ⏳ |
+| 4 | Embeddings (sentence-transformers), Qdrant, semantic dedup into stories | ✅ |
 | 5 | LLM summaries + topic classification | ⏳ |
 | 6 | User profile vector, recommendation engine, ranking | ⏳ |
 | 7 | Feed caching, cursor pagination, diversity | ⏳ |
@@ -338,6 +384,10 @@ docker compose exec postgres psql -U newsfeed -d newsfeed \
 - **psycopg3 for sync + async** — one driver for the app (async) and Alembic
   (sync), fewer moving parts.
 - **Qdrant owns vectors, Postgres owns truth** — articles store only an
-  `embedding_reference`.
+  `embedding_reference`; dedup re-reads `story_id` from Postgres, never trusts
+  the vector payload.
+- **Local, offline embeddings** — sentence-transformers keeps ingestion free and
+  network-independent; the `EmbeddingProvider` ABC leaves room for a hosted
+  provider later.
 - **Transparent scoring, no ML ranker** — the feed score is a documented linear
   combination with configurable weights; explainable and testable first.
