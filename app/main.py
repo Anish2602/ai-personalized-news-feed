@@ -31,6 +31,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     configure_logging(settings.log_level, json_output=not settings.debug)
     logger.info("app_startup", environment=settings.environment, app=settings.app_name)
     yield
+    from app.cache.redis import close_redis
+
+    await close_redis()
     await dispose_engine()
     logger.info("app_shutdown")
 

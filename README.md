@@ -8,8 +8,8 @@ feed over a REST API.
 
 Built as a **modular monolith with background workers** — not microservices.
 
-> **Build status:** Phases 1–2 complete (foundation + user/article/interaction
-> APIs over API→Service→Repository layers). See the roadmap below.
+> **Build status:** Phases 1–3 complete (foundation, user/article/interaction
+> APIs, RSS ingestion + Celery workers + Redis). See the roadmap below.
 
 ---
 
@@ -186,8 +186,9 @@ schema authority.
 | GET | `/articles` | Cursor-paginated list; filters: `source`, `status`, `limit`, `cursor` |
 | GET | `/articles/{article_id}` | Article detail |
 | POST | `/interactions` | Record VIEW/CLICK/LIKE/DISLIKE/SAVE/SKIP/SHARE (`404` if user/article unknown) |
+| POST | `/admin/ingest` | Trigger ingestion. `202` + `task_id` (async), or `{"run_sync": true}` to run in-process and get the per-source report |
 
-*Coming:* `POST /api/v1/admin/ingest` (Phase 3), `GET /api/v1/feed` (Phase 6).
+*Coming:* `GET /api/v1/feed` (Phase 6).
 
 All errors share one envelope: `{"error": {"code": "...", "message": "..."}}`.
 Every response carries `X-Request-Id`.
@@ -213,6 +214,11 @@ curl -s "$API/articles?limit=20&cursor=<next_cursor-from-previous-response>"
 # record an interaction
 curl -s -XPOST $API/interactions -H 'content-type: application/json' \
   -d "{\"user_id\":\"$UID\",\"article_id\":\"<article-uuid>\",\"interaction_type\":\"LIKE\"}"
+
+# ingest news now (async — needs a running worker)
+curl -s -XPOST $API/admin/ingest -H 'content-type: application/json' -d '{}'
+# ingest synchronously and see what each feed returned
+curl -s -XPOST $API/admin/ingest -H 'content-type: application/json' -d '{"run_sync":true}'
 ```
 
 ---
@@ -235,11 +241,14 @@ pytest --cov=app              # with coverage
 ```
 
 - **Unit** (`tests/unit/`, no infra): config, model metadata, cursor
-  encode/decode, interaction weighting.
+  encode/decode, interaction weighting, RSS entry mapping, article normalizer,
+  retry backoff.
 - **Integration** (`tests/integration/`, real PostgreSQL): user CRUD +
   conflicts, interest upsert, article pagination (walks every row, no overlap),
-  interaction persistence + validation. Each test runs in a transaction that is
-  rolled back. Set `TEST_DATABASE_URL`; the suite skips (does not fail) if it is
+  interaction persistence + validation, ingestion (new/duplicate/invalid counts,
+  idempotency, source isolation), processing-job state machine, `POST
+  /admin/ingest` sync + async. Each test runs in a transaction that is rolled
+  back. Set `TEST_DATABASE_URL`; the suite skips (does not fail) if it is
   unreachable.
 
 Scoring, dedup, profile-building and cache tests are added alongside their
@@ -247,13 +256,72 @@ features in later phases.
 
 ---
 
-## 11. Roadmap
+## 11. News ingestion & processing
+
+### Ingestion flow
+
+```
+RSS feed URLs (NEWS_RSS_FEEDS)
+  → RSSNewsSource.fetch()      HTTP GET + feedparser (no site scraping)
+  → normalize()                strip HTML, unescape, collapse WS, clamp lengths,
+                               require http(s) URL + title; drop the rest
+  → stage-1 dedup              skip URLs already in the batch or in the DB
+  → ArticleRepository.create   persist (url is UNIQUE — ingestion is idempotent)
+  → ProcessingJob(PENDING)     + enqueue process_article(article_id)
+```
+
+`NewsSource` is an ABC; `RSSNewsSource` is the reference implementation and
+`NewsAPISource` (disabled unless `NEWS_API_ENABLED=true`) demonstrates the seam.
+A failing source is isolated — its `SourceReport` carries the error and the
+other sources still run.
+
+### Celery worker architecture
+
+- **Broker/back-end:** Redis (`CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`).
+- **Tasks:** `ingest_news` (all feeds; also on a beat schedule every
+  `INGEST_INTERVAL_MINUTES`) and `process_article` (per-article pipeline).
+- **Sync ↔ async bridge:** `app/workers/runtime.py` gives each task run a fresh
+  `NullPool` async engine + one committed session, avoiding event-loop reuse
+  bugs. Services stay async and are shared verbatim with the API.
+- **Reliability:** `acks_late`, `prefetch_multiplier=1`, bounded retries
+  (`TASK_MAX_RETRIES`) with exponential backoff
+  (`TASK_RETRY_BACKOFF_SECONDS * 2**attempt`). Transient errors (Qdrant/LLM/
+  network) retry; everything else fails the job immediately. `ProcessingJob`
+  records status, `retry_count` and the last error; `worker_failures_total`
+  counts failures by task.
+- **Idempotency:** re-running `ingest_news` inserts nothing new;
+  `process_article` no-ops on an already-`COMPLETED` job.
+
+> The `process_article` pipeline body (clean → embed → dedup → classify →
+> summarize) is a no-op in Phase 3 — it only advances job/article state. Phases
+> 4–5 fill it in.
+
+### Two-stage deduplication
+
+1. **URL-level (Phase 3, here):** cheap; prevents re-fetching/re-embedding
+   articles we already have.
+2. **Semantic (Phase 4):** embed → Qdrant top-K → threshold
+   (`SEMANTIC_DUPLICATE_THRESHOLD`, configurable, *evaluate against real data*)
+   → attach to an existing `Story` or create a new one.
+
+### Local end-to-end
+
+```bash
+docker compose up --build                       # api + worker + infra
+curl -s -XPOST localhost:8000/api/v1/admin/ingest -d '{}' -H 'content-type: application/json'
+docker compose exec postgres psql -U newsfeed -d newsfeed \
+  -c "select processing_status, count(*) from articles group by 1;"
+```
+
+---
+
+## 12. Roadmap
 
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | Foundation: config, DB, models, Alembic, FastAPI, health, Docker, CI | ✅ |
 | 2 | User / article / interaction APIs (service + repository layers, cursor pagination) | ✅ |
-| 3 | RSS ingestion, Celery, Redis | ⏳ |
+| 3 | RSS ingestion (idempotent), Celery workers, Redis, `POST /admin/ingest` | ✅ |
 | 4 | Qdrant, embeddings, semantic deduplication | ⏳ |
 | 5 | LLM summaries + topic classification | ⏳ |
 | 6 | User profile vector, recommendation engine, ranking | ⏳ |
@@ -263,7 +331,7 @@ features in later phases.
 
 ---
 
-## 12. Design tradeoffs
+## 13. Design tradeoffs
 
 - **Modular monolith, not microservices** — one deployable, clear module
   boundaries; workers scale independently via the queue.

@@ -34,17 +34,12 @@ async def _check_postgres() -> bool:
 
 
 async def _check_redis() -> bool:
-    try:
-        import redis.asyncio as aioredis
+    from app.cache.redis import ping_redis
 
-        client = aioredis.from_url(get_settings().redis_url)
-        try:
-            return bool(await client.ping())
-        finally:
-            await client.aclose()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("healthcheck_failed", component="redis", error=str(exc))
-        return False
+    ok = await ping_redis()
+    if not ok:
+        logger.warning("healthcheck_failed", component="redis")
+    return ok
 
 
 async def _check_qdrant() -> bool:

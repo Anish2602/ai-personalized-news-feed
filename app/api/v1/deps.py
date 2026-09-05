@@ -14,8 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db_session
 from app.repositories.article_repository import ArticleRepository
 from app.repositories.interaction_repository import InteractionRepository
+from app.repositories.processing_repository import ProcessingRepository
 from app.repositories.user_repository import UserRepository
 from app.services.article_service import ArticleService
+from app.services.ingestion_service import IngestionService, QueueProcessing
 from app.services.interaction_service import InteractionService
 from app.services.user_service import UserService
 
@@ -38,6 +40,23 @@ def get_interaction_service(session: SessionDep) -> InteractionService:
     )
 
 
+def get_queue_processing() -> QueueProcessing:
+    """Seam for enqueuing AI processing — overridden with a spy in tests."""
+    from app.workers.dispatch import enqueue_process_article
+
+    return enqueue_process_article
+
+
+def get_ingestion_service(
+    session: SessionDep,
+    queue_processing: Annotated[QueueProcessing, Depends(get_queue_processing)],
+) -> IngestionService:
+    return IngestionService(
+        ArticleRepository(session), ProcessingRepository(session), queue_processing
+    )
+
+
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
 ArticleServiceDep = Annotated[ArticleService, Depends(get_article_service)]
 InteractionServiceDep = Annotated[InteractionService, Depends(get_interaction_service)]
+IngestionServiceDep = Annotated[IngestionService, Depends(get_ingestion_service)]

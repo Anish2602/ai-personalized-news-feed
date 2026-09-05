@@ -70,10 +70,19 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     <<: *app-env
-    command: ["celery", "-A", "app.workers.celery_app.celery_app", "worker", "--loglevel=INFO"]
+    # Embedded beat (-B) is fine for a single-worker dev stack; run a dedicated
+    # `celery beat` process in production.
+    command:
+      - celery
+      - -A
+      - app.workers.celery_app.celery_app
+      - worker
+      - --beat
+      - --loglevel=INFO
+      - --concurrency=2
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
       postgres:

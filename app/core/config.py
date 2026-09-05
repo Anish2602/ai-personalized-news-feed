@@ -71,6 +71,8 @@ class Settings(BaseSettings):
     news_api_enabled: bool = False
     news_api_key: str | None = None
     ingest_max_articles_per_feed: int = 50
+    ingest_http_timeout_seconds: float = 15.0
+    ingest_interval_minutes: int = 30
 
     # --- Deduplication ---
     semantic_duplicate_threshold: float = 0.90
