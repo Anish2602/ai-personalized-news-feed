@@ -61,11 +61,15 @@ class Settings(BaseSettings):
 
     # --- LLM ---
     llm_provider: str = "openai"
+    llm_enabled: bool = False
     llm_api_key: str | None = None
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"
     llm_timeout_seconds: int = 30
     llm_max_retries: int = 3
+    llm_temperature: float = 0.2
+    llm_max_tokens: int = 700
+    llm_output_max_attempts: int = 2
 
     # --- News ingestion ---
     news_rss_feeds: list[str] = Field(default_factory=list)

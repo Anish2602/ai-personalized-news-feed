@@ -52,11 +52,21 @@ class ValidationError(AppError):
 
 
 class UpstreamError(AppError):
-    """A dependency (LLM, Qdrant, RSS source) failed."""
+    """A dependency (LLM, Qdrant, RSS source) failed transiently — safe to retry."""
 
     status_code = status.HTTP_502_BAD_GATEWAY
     code = "upstream_error"
     message = "An upstream dependency failed."
+
+
+class LLMOutputError(AppError):
+    """The LLM responded but its output could not be parsed/validated after
+    the configured number of re-prompts. Treated as a permanent failure — the
+    processing job is marked FAILED rather than retried forever."""
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    code = "llm_output_error"
+    message = "The language model produced unusable output."
 
 
 class ServiceUnavailableError(AppError):

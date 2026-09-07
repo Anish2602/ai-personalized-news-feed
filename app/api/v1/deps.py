@@ -15,10 +15,12 @@ from app.db.session import get_db_session
 from app.repositories.article_repository import ArticleRepository
 from app.repositories.interaction_repository import InteractionRepository
 from app.repositories.processing_repository import ProcessingRepository
+from app.repositories.story_repository import StoryRepository
 from app.repositories.user_repository import UserRepository
 from app.services.article_service import ArticleService
 from app.services.ingestion_service import IngestionService, QueueProcessing
 from app.services.interaction_service import InteractionService
+from app.services.story_service import StoryService
 from app.services.user_service import UserService
 
 SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
@@ -30,6 +32,10 @@ def get_user_service(session: SessionDep) -> UserService:
 
 def get_article_service(session: SessionDep) -> ArticleService:
     return ArticleService(ArticleRepository(session))
+
+
+def get_story_service(session: SessionDep) -> StoryService:
+    return StoryService(StoryRepository(session))
 
 
 def get_interaction_service(session: SessionDep) -> InteractionService:
@@ -58,5 +64,6 @@ def get_ingestion_service(
 
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
 ArticleServiceDep = Annotated[ArticleService, Depends(get_article_service)]
+StoryServiceDep = Annotated[StoryService, Depends(get_story_service)]
 InteractionServiceDep = Annotated[InteractionService, Depends(get_interaction_service)]
 IngestionServiceDep = Annotated[IngestionService, Depends(get_ingestion_service)]

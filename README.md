@@ -8,9 +8,9 @@ feed over a REST API.
 
 Built as a **modular monolith with background workers** — not microservices.
 
-> **Build status:** Phases 1–4 complete (foundation, APIs, RSS ingestion +
-> Celery, embeddings + Qdrant + semantic deduplication into stories). See the
-> roadmap below.
+> **Build status:** Phases 1–5 complete (foundation, APIs, RSS ingestion +
+> Celery, embeddings + Qdrant + semantic dedup, LLM summaries + topic
+> classification with offline fallbacks). See the roadmap below.
 
 ---
 
@@ -69,7 +69,7 @@ app/
 ├── schemas/               # Pydantic request/response models
 ├── repositories/          # data-access layer (holds the UoW session, never commits)
 ├── services/              # domain logic (raises typed AppError subclasses)
-├── ai/                    # embeddings (provider ABC + sentence-transformers); llm/summarizer/classifier (Phase 5)
+├── ai/                    # embeddings + llm provider ABCs, summarizer, classifier, JSON recovery
 ├── vector/                # Qdrant client, collection spec, search wrapper
 ├── cache/                 # Redis client (feed cache in Phase 7)
 ├── workers/               # celery app + task modules           (Phase 3+)
@@ -193,7 +193,9 @@ schema authority.
 | POST | `/users/{user_id}/interests` | Add/replace interest weights (idempotent upsert) |
 | GET | `/users/{user_id}/interests` | List a user's interests |
 | GET | `/articles` | Cursor-paginated list; filters: `source`, `status`, `limit`, `cursor` |
-| GET | `/articles/{article_id}` | Article detail |
+| GET | `/articles/{article_id}` | Article detail (incl. `topics`) |
+| GET | `/stories` | Cursor-paginated stories (canonical title, AI summary, key points, topics) |
+| GET | `/stories/{story_id}` | Story detail — summary, key points, topics, source list, member articles |
 | POST | `/interactions` | Record VIEW/CLICK/LIKE/DISLIKE/SAVE/SKIP/SHARE (`404` if user/article unknown) |
 | POST | `/admin/ingest` | Trigger ingestion. `202` + `task_id` (async), or `{"run_sync": true}` to run in-process and get the per-source report |
 
@@ -249,18 +251,21 @@ pytest -q                     # all
 pytest --cov=app              # with coverage
 ```
 
-- **Unit** (`tests/unit/`, no infra): config, model metadata, cursor
-  encode/decode, interaction weighting, RSS entry mapping, article normalizer,
-  retry backoff, embedding provider (mocked model), **semantic dedup logic**
-  (empty index, attach-to-story, threshold boundary, neighbour back-fill).
+- **Unit** (`tests/unit/`, no infra): config, model metadata, cursor codec,
+  interaction weighting, RSS mapping, normalizer, retry backoff, embedding
+  provider (mocked), semantic dedup logic, **LLM JSON recovery**, **summarizer**
+  (valid / fenced / re-prompt / exhausted-attempts / extractive fallback),
+  **classifier** (valid subset, out-of-taxonomy filtering, LLM-failure fallback,
+  keyword matching).
 - **Integration** (`tests/integration/`, real PostgreSQL + Qdrant): user CRUD +
-  conflicts, interest upsert, article pagination, interaction persistence,
+  conflicts, interest upsert, article/story pagination, interaction persistence,
   ingestion (counts, idempotency, source isolation), processing pipeline (state
-  machine + story assignment + embedding reference), **semantic dedup against a
-  live Qdrant collection** (first article → story, near-duplicate → same story,
-  unrelated → new story), `POST /admin/ingest` sync + async. Each test runs in a
-  rolled-back transaction; Qdrant tests use a throwaway collection. Set
-  `TEST_DATABASE_URL` / `TEST_QDRANT_URL`; tests skip (don't fail) if unreachable.
+  machine + dedup + enrichment + `LLMOutputError` → job FAILED), semantic dedup
+  vs a live Qdrant collection, **enrichment** (summarize-once, duplicate merges
+  topics, no-LLM fallback), `GET /stories`, `POST /admin/ingest` sync + async.
+  Each test runs in a rolled-back transaction; Qdrant tests use a throwaway
+  collection. Set `TEST_DATABASE_URL` / `TEST_QDRANT_URL`; tests skip (don't
+  fail) if unreachable.
 
 Scoring, dedup, profile-building and cache tests are added alongside their
 features in later phases.
@@ -336,19 +341,44 @@ story from the database — no stale-payload merges.
 > high) and is model-dependent — evaluate it against a labelled sample of your
 > real feeds before trusting it.
 
-### `process_article` pipeline (Phase 4)
+### `process_article` pipeline
 
 ```
 mark PROCESSING
   → build_embedding_text(title + description|content, truncated to EMBEDDING_MAX_CHARS)
   → embed
   → semantic dedup → assign story_id + embedding_reference, upsert vector
-  → (Phase 5: classify + summarize)
+  → classify article → article.topics       (LLM, else keyword fallback)
+  → if story has no summary: summarize → story.summary / key_points / topics
+    else: merge topics onto the story
 mark COMPLETED
 ```
 
-Embedding/Qdrant/network failures are wrapped as `UpstreamError` → retried with
-exponential backoff; a missing article is a permanent failure.
+Embedding/Qdrant/transient-LLM/network failures → `UpstreamError` → retried with
+exponential backoff. A missing article, or LLM output still unparseable after
+`LLM_OUTPUT_MAX_ATTEMPTS` re-prompts (`LLMOutputError`), is a **permanent**
+failure → job `FAILED`, no infinite retry.
+
+### LLM: summarization & classification
+
+`LLMProvider` ABC → `OpenAIProvider` (works with the OpenAI API **or any
+OpenAI-compatible endpoint** via `LLM_BASE_URL` — verified against a local
+Ollama). `get_llm_provider()` returns `None` when `LLM_ENABLED=false` or no key
+is set.
+
+- **Summarizer** asks for a strict JSON object and validates it with Pydantic
+  (`{summary, key_points[], topics[]}`). Malformed output is recovered
+  (fenced-JSON / embedded-object extraction), then re-prompted up to
+  `LLM_OUTPUT_MAX_ATTEMPTS` times, then `LLMOutputError`. Bad output never
+  crashes the worker.
+- **Classifier** maps articles to `TOPIC_TAXONOMY` (configurable). Prefers the
+  LLM; on **any** LLM failure (transport or malformed) falls back to a
+  transparent whole-word keyword matcher so an article is never uncategorized.
+- **No LLM configured** → extractive summary (first sentences) + keyword
+  classification. The feature degrades, it does not fail.
+
+Article topics roll up onto the story (`Story.topics` = union); the story is
+summarized once, when its first article is processed.
 
 ### Local end-to-end
 
@@ -369,7 +399,7 @@ docker compose exec postgres psql -U newsfeed -d newsfeed \
 | 2 | User / article / interaction APIs (service + repository layers, cursor pagination) | ✅ |
 | 3 | RSS ingestion (idempotent), Celery workers, Redis, `POST /admin/ingest` | ✅ |
 | 4 | Embeddings (sentence-transformers), Qdrant, semantic dedup into stories | ✅ |
-| 5 | LLM summaries + topic classification | ⏳ |
+| 5 | LLM summaries + topic classification (structured output, offline fallbacks) | ✅ |
 | 6 | User profile vector, recommendation engine, ranking | ⏳ |
 | 7 | Feed caching, cursor pagination, diversity | ⏳ |
 | 8 | Prometheus/Grafana dashboards, log enrichment | ⏳ |
@@ -389,5 +419,10 @@ docker compose exec postgres psql -U newsfeed -d newsfeed \
 - **Local, offline embeddings** — sentence-transformers keeps ingestion free and
   network-independent; the `EmbeddingProvider` ABC leaves room for a hosted
   provider later.
+- **LLM is optional and behind an ABC** — the pipeline runs (with weaker output)
+  with no API key at all; `OpenAIProvider` targets any OpenAI-compatible
+  endpoint, so swapping model/vendor is a config change.
+- **Malformed LLM output is a domain concern, not a crash** — recover, re-prompt
+  a bounded number of times, then fail the job cleanly.
 - **Transparent scoring, no ML ranker** — the feed score is a documented linear
   combination with configurable weights; explainable and testable first.

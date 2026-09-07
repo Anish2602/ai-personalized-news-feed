@@ -12,7 +12,10 @@ from uuid import UUID
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.classifier import Classifier
 from app.ai.embeddings import build_embedding_text, get_embedding_provider
+from app.ai.llm import get_llm_provider
+from app.ai.summarizer import Summarizer
 from app.core.config import get_settings
 from app.core.exceptions import ServiceUnavailableError, UpstreamError
 from app.core.logging import bind_context, clear_context, get_logger
@@ -22,6 +25,7 @@ from app.repositories.article_repository import ArticleRepository
 from app.repositories.processing_repository import ProcessingRepository
 from app.repositories.story_repository import StoryRepository
 from app.services.deduplication_service import DeduplicationService
+from app.services.enrichment_service import EnrichmentService
 from app.vector.client import vector_store
 from app.workers.celery_app import celery_app
 from app.workers.runtime import run_with_session
@@ -64,16 +68,28 @@ async def _run_pipeline(session: AsyncSession, article_id: UUID) -> dict[str, st
         title=article.title, description=article.description, content=article.content
     )
 
+    stories = StoryRepository(session)
     try:
         async with vector_store() as store:
             dedup = DeduplicationService(
-                articles, StoryRepository(session), store, get_embedding_provider()
+                articles, stories, store, get_embedding_provider()
             )
             dedup_result = await dedup.deduplicate(article, text=text)
     except (httpx.HTTPError, ConnectionError, TimeoutError, OSError) as exc:
         raise UpstreamError(f"embedding/vector failure: {exc}") from exc
 
-    # --- Phase 5: topic classification + summarization land here ---
+    settings = get_settings()
+    llm = get_llm_provider()
+    enrichment = EnrichmentService(
+        articles,
+        stories,
+        Summarizer(llm),
+        Classifier(llm, settings.topic_taxonomy),
+        settings.topic_taxonomy,
+    )
+    enrich_result = await enrichment.enrich(
+        article, text=text, story_id=dedup_result.story_id
+    )
 
     await repo.mark_completed(job)
     logger.info(
@@ -81,6 +97,8 @@ async def _run_pipeline(session: AsyncSession, article_id: UUID) -> dict[str, st
         article_id=str(article_id),
         story_id=str(dedup_result.story_id),
         duplicate=dedup_result.is_duplicate,
+        topics=enrich_result.article_topics,
+        summarized=enrich_result.summarized,
     )
     return {
         "status": "completed",

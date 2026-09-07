@@ -27,6 +27,11 @@ class ArticleRepository(BaseRepository):
         if article is not None:
             article.embedding_reference = reference
 
+    async def set_topics(self, article_id: UUID, topics: list[str]) -> None:
+        article = await self.session.get(Article, article_id)
+        if article is not None:
+            article.topics = list(topics)
+
     async def list_page(
         self,
         *,

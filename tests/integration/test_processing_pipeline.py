@@ -5,12 +5,14 @@ import uuid
 
 import pytest
 
+from app.core.exceptions import LLMOutputError
 from app.db.models.article import Article, ArticleProcessingStatus
 from app.db.models.processing import ProcessingJobStatus
+from app.db.models.story import Story
 from app.repositories.processing_repository import ProcessingRepository
 from app.workers import processing_tasks
 from app.workers.processing_tasks import _record_failure, _run_pipeline
-from tests._fakes import FakeEmbeddingProvider, FakeVectorStore
+from tests._fakes import FakeEmbeddingProvider, FakeLLMProvider, FakeVectorStore
 
 pytestmark = pytest.mark.asyncio
 
@@ -25,6 +27,8 @@ def _stub_ai(monkeypatch):
 
     monkeypatch.setattr(processing_tasks, "vector_store", _vs)
     monkeypatch.setattr(processing_tasks, "get_embedding_provider", FakeEmbeddingProvider)
+    # LLM disabled by default -> extractive summary + keyword classification.
+    monkeypatch.setattr(processing_tasks, "get_llm_provider", lambda: None)
 
 
 async def _article_with_job(db_session) -> Article:
@@ -50,6 +54,25 @@ async def test_pipeline_advances_state_to_completed(db_session):
     job = await ProcessingRepository(db_session).get_latest_job(article.id)
     assert job.status == ProcessingJobStatus.COMPLETED
     assert job.started_at is not None and job.completed_at is not None
+
+    # enrichment ran (fallback path): article classified, story summarized
+    assert article.topics  # non-empty
+    story = await db_session.get(Story, article.story_id)
+    assert story.summary
+    assert set(article.topics).issubset(set(story.topics))
+
+
+async def test_malformed_llm_output_fails_the_job(db_session, monkeypatch):
+    # 1 call for the classifier + up to 2 for the summarizer, all unparseable.
+    monkeypatch.setattr(
+        processing_tasks,
+        "get_llm_provider",
+        lambda: FakeLLMProvider(["nonsense", "still nonsense", "nope"]),
+    )
+    article = await _article_with_job(db_session)
+
+    with pytest.raises(LLMOutputError):
+        await _run_pipeline(db_session, article.id)
 
 
 async def test_pipeline_is_idempotent(db_session):

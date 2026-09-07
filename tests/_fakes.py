@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from app.ai.embeddings.base import EmbeddingProvider
+from app.ai.llm.base import LLMMessage, LLMProvider
 from app.vector.search import VectorMatch
 
 
@@ -70,6 +71,27 @@ class FakeVectorStore:
 
     async def delete(self, point_id: str) -> None:
         self.points.pop(point_id, None)
+
+
+class FakeLLMProvider(LLMProvider):
+    """Returns canned responses in order, or raises a fixed error."""
+
+    def __init__(self, responses: list[str] | str | None = None, *, error: Exception | None = None):
+        self._responses = [responses] if isinstance(responses, str) else list(responses or [])
+        self._error = error
+        self.calls: list[list[LLMMessage]] = []
+
+    @property
+    def model_name(self) -> str:
+        return "fake-llm"
+
+    async def complete(self, messages, *, temperature=None, max_tokens=None, json_mode=False):
+        self.calls.append(list(messages))
+        if self._error is not None:
+            raise self._error
+        if not self._responses:
+            raise AssertionError("FakeLLMProvider ran out of canned responses")
+        return self._responses.pop(0)
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
