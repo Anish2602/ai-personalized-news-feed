@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from uuid import UUID
 
 from app.core.config import get_settings
@@ -10,6 +11,8 @@ from app.repositories.article_repository import ArticleRepository
 from app.repositories.interaction_repository import InteractionRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.interaction import InteractionCreate
+
+QueueProfileRebuild = Callable[[UUID], None]
 
 logger = get_logger(__name__)
 
@@ -25,10 +28,12 @@ class InteractionService:
         interactions: InteractionRepository,
         users: UserRepository,
         articles: ArticleRepository,
+        queue_profile_rebuild: QueueProfileRebuild | None = None,
     ) -> None:
         self.interactions = interactions
         self.users = users
         self.articles = articles
+        self._queue_profile_rebuild = queue_profile_rebuild or (lambda _uid: None)
 
     async def record(self, payload: InteractionCreate) -> Interaction:
         if await self.users.get(payload.user_id) is None:
@@ -48,8 +53,9 @@ class InteractionService:
             interaction_type=payload.interaction_type.value,
             weight=interaction_weight(payload.interaction_type),
         )
-        # Phase 6/7: enqueue rebuild_user_profile(user_id) and invalidate the
-        # user's feed cache on high-signal interactions.
+        # Recompute the user's interest vector in the background.
+        # Phase 7: also invalidate the user's feed cache on high-signal events.
+        self._queue_profile_rebuild(payload.user_id)
         return interaction
 
     async def list_for_user(self, user_id: UUID, *, limit: int = 200) -> list[Interaction]:

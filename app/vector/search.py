@@ -25,6 +25,7 @@ class VectorStoreProtocol(Protocol):
     async def search(
         self, vector: list[float], *, limit: int, exclude_id: str | None = None
     ) -> list[VectorMatch]: ...
+    async def retrieve_vectors(self, ids: list[str]) -> dict[str, list[float]]: ...
     async def delete(self, point_id: str) -> None: ...
 
 
@@ -76,6 +77,18 @@ class QdrantVectorStore:
             VectorMatch(id=str(p.id), score=float(p.score), payload=p.payload or {})
             for p in result.points
         ]
+
+    async def retrieve_vectors(self, ids: list[str]) -> dict[str, list[float]]:
+        if not ids:
+            return {}
+        await self.ensure_collection()
+        records = await self._client.retrieve(
+            collection_name=self._spec.name,
+            ids=ids,
+            with_vectors=True,
+            with_payload=False,
+        )
+        return {str(r.id): list(r.vector) for r in records if r.vector is not None}
 
     async def delete(self, point_id: str) -> None:
         await self._client.delete(

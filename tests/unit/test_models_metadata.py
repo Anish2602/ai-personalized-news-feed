@@ -13,6 +13,7 @@ def test_all_core_tables_registered():
         "articles",
         "interactions",
         "processing_jobs",
+        "user_profiles",
     }
 
 

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, status
 from pydantic import BaseModel
 
-from app.api.v1.deps import IngestionServiceDep
+from app.api.v1.deps import IngestionServiceDep, SessionDep
 from app.core.logging import get_logger
 from app.ingestion.rss import RSSNewsSource
+from app.repositories.interaction_repository import InteractionRepository
+from app.repositories.profile_repository import ProfileRepository
 from app.services.ingestion_service import SourceReport
+from app.services.profile_service import ProfileResult, ProfileService
+from app.vector.client import vector_store
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -49,3 +55,13 @@ async def trigger_ingest(payload: IngestRequest, service: IngestionServiceDep):
     task_id = enqueue_ingest(feeds)
     logger.info("ingest_triggered", task_id=task_id, feeds=len(feeds))
     return IngestQueued(task_id=task_id)
+
+
+@router.post("/profile/{user_id}/rebuild", response_model=ProfileResult)
+async def rebuild_profile(user_id: UUID, session: SessionDep) -> ProfileResult:
+    """Synchronously rebuild a user's interest vector (normally a Celery task)."""
+    async with vector_store() as store:
+        service = ProfileService(
+            InteractionRepository(session), ProfileRepository(session), store
+        )
+        return await service.rebuild(user_id)

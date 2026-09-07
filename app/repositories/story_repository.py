@@ -29,6 +29,25 @@ class StoryRepository(BaseRepository):
         )
         return result.scalar_one_or_none()
 
+    async def get_many_with_articles(self, story_ids: list[UUID]) -> list[Story]:
+        if not story_ids:
+            return []
+        result = await self.session.execute(
+            select(Story)
+            .where(Story.id.in_(story_ids))
+            .options(selectinload(Story.articles))
+        )
+        return list(result.scalars().all())
+
+    async def recent_with_articles(self, *, limit: int) -> list[Story]:
+        result = await self.session.execute(
+            select(Story)
+            .options(selectinload(Story.articles))
+            .order_by(Story.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
     async def list_page(
         self, *, limit: int, cursor: tuple[datetime, str] | None = None
     ) -> list[Story]:

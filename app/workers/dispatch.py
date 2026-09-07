@@ -19,3 +19,9 @@ def enqueue_ingest(feeds: list[str] | None = None) -> str:
     from app.workers.ingestion_tasks import ingest_news
 
     return ingest_news.delay(feeds).id
+
+
+def enqueue_profile_rebuild(user_id: UUID) -> None:
+    from app.workers.feed_tasks import rebuild_user_profile
+
+    rebuild_user_profile.delay(str(user_id))

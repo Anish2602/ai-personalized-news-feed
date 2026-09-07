@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     interaction_weight_skip: float = -1.0
     interaction_weight_dislike: float = -4.0
 
+    # --- User profile ---
+    profile_max_interactions: int = 200
+
     # --- Ranking weights ---
     rank_weight_semantic: float = 0.55
     rank_weight_freshness: float = 0.20
@@ -121,6 +124,11 @@ class Settings(BaseSettings):
     feed_default_limit: int = 20
     feed_max_limit: int = 50
     feed_candidate_pool: int = 200
+    feed_exclude_consumed: bool = True
+
+    # Per-source trust score in [0, 1]; sources not listed get the default.
+    source_quality: dict[str, float] = Field(default_factory=dict)
+    source_quality_default: float = 0.5
 
     # --- Feed cache ---
     feed_cache_ttl_seconds: int = 300

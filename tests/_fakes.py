@@ -53,6 +53,12 @@ class FakeVectorStore:
     async def ensure_collection(self) -> None:  # noqa: D102
         return None
 
+    def seed(self, article_id, vector: list[float], *, story_id=None) -> None:
+        payload: dict[str, Any] = {"article_id": str(article_id)}
+        if story_id is not None:
+            payload["story_id"] = str(story_id)
+        self.points[str(article_id)] = (vector, payload)
+
     async def upsert(self, point_id: str, vector: list[float], payload: dict[str, Any]) -> None:
         self.points[point_id] = (vector, payload)
 
@@ -68,6 +74,9 @@ class FakeVectorStore:
         ]
         scored.sort(key=lambda m: m.score, reverse=True)
         return scored[:limit]
+
+    async def retrieve_vectors(self, ids: list[str]) -> dict[str, list[float]]:
+        return {i: self.points[i][0] for i in ids if i in self.points}
 
     async def delete(self, point_id: str) -> None:
         self.points.pop(point_id, None)

@@ -8,9 +8,9 @@ feed over a REST API.
 
 Built as a **modular monolith with background workers** — not microservices.
 
-> **Build status:** Phases 1–5 complete (foundation, APIs, RSS ingestion +
-> Celery, embeddings + Qdrant + semantic dedup, LLM summaries + topic
-> classification with offline fallbacks). See the roadmap below.
+> **Build status:** Phases 1–6 complete — through the recommendation engine:
+> user interest vectors, `GET /feed` with a transparent linear ranking function.
+> See the roadmap below.
 
 ---
 
@@ -72,9 +72,9 @@ app/
 ├── ai/                    # embeddings + llm provider ABCs, summarizer, classifier, JSON recovery
 ├── vector/                # Qdrant client, collection spec, search wrapper
 ├── cache/                 # Redis client (feed cache in Phase 7)
-├── workers/               # celery app + task modules           (Phase 3+)
-├── ingestion/             # RSS/news sources + normalizer       (Phase 3)
-└── ranking/               # scorer, freshness, diversity        (Phase 6/7)
+├── workers/               # celery app + ingest/process/feed tasks + sync↔async runtime
+├── ingestion/             # RSS/news sources + normalizer
+└── ranking/               # scorer (linear), freshness (decay), diversity (rarity + interleave)
 migrations/                # Alembic
 tests/                     # unit + integration
 docker/ monitoring/ scripts/ .github/workflows/
@@ -196,8 +196,10 @@ schema authority.
 | GET | `/articles/{article_id}` | Article detail (incl. `topics`) |
 | GET | `/stories` | Cursor-paginated stories (canonical title, AI summary, key points, topics) |
 | GET | `/stories/{story_id}` | Story detail — summary, key points, topics, source list, member articles |
-| POST | `/interactions` | Record VIEW/CLICK/LIKE/DISLIKE/SAVE/SKIP/SHARE (`404` if user/article unknown) |
+| GET | `/feed` | Personalized ranked stories for `X-User-Id`. `?limit=`, `?debug=true` for the per-feature score breakdown |
+| POST | `/interactions` | Record VIEW/CLICK/LIKE/DISLIKE/SAVE/SKIP/SHARE (`404` if user/article unknown); triggers a profile rebuild |
 | POST | `/admin/ingest` | Trigger ingestion. `202` + `task_id` (async), or `{"run_sync": true}` to run in-process and get the per-source report |
+| POST | `/admin/profile/{user_id}/rebuild` | Synchronously rebuild a user's interest vector (normally a Celery task) |
 
 *Coming:* `GET /api/v1/feed` (Phase 6).
 
@@ -253,19 +255,19 @@ pytest --cov=app              # with coverage
 
 - **Unit** (`tests/unit/`, no infra): config, model metadata, cursor codec,
   interaction weighting, RSS mapping, normalizer, retry backoff, embedding
-  provider (mocked), semantic dedup logic, **LLM JSON recovery**, **summarizer**
-  (valid / fenced / re-prompt / exhausted-attempts / extractive fallback),
-  **classifier** (valid subset, out-of-taxonomy filtering, LLM-failure fallback,
-  keyword matching).
-- **Integration** (`tests/integration/`, real PostgreSQL + Qdrant): user CRUD +
-  conflicts, interest upsert, article/story pagination, interaction persistence,
-  ingestion (counts, idempotency, source isolation), processing pipeline (state
-  machine + dedup + enrichment + `LLMOutputError` → job FAILED), semantic dedup
-  vs a live Qdrant collection, **enrichment** (summarize-once, duplicate merges
-  topics, no-LLM fallback), `GET /stories`, `POST /admin/ingest` sync + async.
-  Each test runs in a rolled-back transaction; Qdrant tests use a throwaway
-  collection. Set `TEST_DATABASE_URL` / `TEST_QDRANT_URL`; tests skip (don't
-  fail) if unreachable.
+  provider (mocked), semantic dedup logic, LLM JSON recovery, summarizer,
+  classifier, **profile builder** (weighted avg, negative weights, cancel→None),
+  **freshness decay**, **ranking scorer** (weighted sum, contributions,
+  normalization), **diversity** (rarity, deterministic interleave).
+- **Integration** (`tests/integration/`, real PostgreSQL + Qdrant): user/article/
+  story/interaction flows, ingestion, processing pipeline (dedup + enrichment +
+  `LLMOutputError` → job FAILED), semantic dedup vs a live Qdrant collection,
+  enrichment, **profile rebuild** (weighted vector from interactions, idempotent),
+  **recommendation** (relevant > irrelevant, dislike/consumed exclusion, cold
+  start), **`GET /feed`** (auth required, cold start, `?debug` breakdown),
+  `GET /stories`, `POST /admin/ingest`. Each test runs in a rolled-back
+  transaction; Qdrant tests use a throwaway collection. Set `TEST_DATABASE_URL` /
+  `TEST_QDRANT_URL`; tests skip (don't fail) if unreachable.
 
 Scoring, dedup, profile-building and cache tests are added alongside their
 features in later phases.
@@ -391,7 +393,54 @@ docker compose exec postgres psql -U newsfeed -d newsfeed \
 
 ---
 
-## 12. Roadmap
+## 12. Recommendation & ranking
+
+### User interest vector
+
+Every interaction enqueues `rebuild_user_profile`, which:
+
+```
+recent interactions (≤ PROFILE_MAX_INTERACTIONS)
+  → signed weight per interaction (INTERACTION_WEIGHT_*, all in config)
+  → sum weights per article
+  → fetch those article vectors from Qdrant
+  → profile = normalize( Σ wᵢ·vᵢ / Σ |wᵢ| )
+  → persist to user_profiles (embedding, interaction_count, embedding_model)
+```
+
+SKIP/DISLIKE carry negative weights → they push the profile *away* from that
+content. `embedding` stays null until there is positive signal. The math is a
+pure function ([app/ai/profile_builder.py](app/ai/profile_builder.py)) —
+deterministic and unit-tested; the service only does I/O.
+
+### `GET /feed`
+
+```
+load profile
+  → candidates: Qdrant search(profile vector, FEED_CANDIDATE_POOL)
+                → map article hits to stories, keep best score per story
+    (cold start / no profile → most-recent stories, semantic term = 0)
+  → drop stories the user DISLIKEd, or already consumed (CLICK/VIEW) when
+    FEED_EXCLUDE_CONSUMED
+  → per-story features, each normalized to [0, 1]:
+      semantic        best article-similarity to the profile vector
+      freshness       exp(-age_hours / FRESHNESS_DECAY_HOURS)   ← a score, not a sort
+      popularity      Σ weightᵢ·countᵢ over VIEW/LIKE/SAVE/SHARE, then min-max
+                      across the candidate pool (ONE grouped query — no N+1)
+      source_quality  mean SOURCE_QUALITY[source] (else SOURCE_QUALITY_DEFAULT)
+      diversity       primary-topic rarity within the pool
+  → final = 0.55·sem + 0.20·fresh + 0.10·pop + 0.10·src + 0.05·div   (RANK_WEIGHT_*)
+  → sort desc, take limit
+```
+
+No ML ranker — the score is a documented linear combination and `?debug=true`
+returns every feature value and its weighted contribution. Diversity
+re-ordering (`interleave_by_topic`) and feed caching arrive in Phase 7; the
+diversity *feature* and the interleave function are already implemented + tested.
+
+---
+
+## 13. Roadmap
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -400,14 +449,14 @@ docker compose exec postgres psql -U newsfeed -d newsfeed \
 | 3 | RSS ingestion (idempotent), Celery workers, Redis, `POST /admin/ingest` | ✅ |
 | 4 | Embeddings (sentence-transformers), Qdrant, semantic dedup into stories | ✅ |
 | 5 | LLM summaries + topic classification (structured output, offline fallbacks) | ✅ |
-| 6 | User profile vector, recommendation engine, ranking | ⏳ |
-| 7 | Feed caching, cursor pagination, diversity | ⏳ |
+| 6 | User profile vector, recommendation engine, transparent ranking, `GET /feed` | ✅ |
+| 7 | Feed caching, cursor pagination, diversity re-ordering | ⏳ |
 | 8 | Prometheus/Grafana dashboards, log enrichment | ⏳ |
 | 9 | Full test matrix, CI/CD, production hardening | ⏳ |
 
 ---
 
-## 13. Design tradeoffs
+## 14. Design tradeoffs
 
 - **Modular monolith, not microservices** — one deployable, clear module
   boundaries; workers scale independently via the queue.
@@ -424,5 +473,10 @@ docker compose exec postgres psql -U newsfeed -d newsfeed \
   endpoint, so swapping model/vendor is a config change.
 - **Malformed LLM output is a domain concern, not a crash** — recover, re-prompt
   a bounded number of times, then fail the job cleanly.
+- **Transparent ranking before ML** — a linear score with configurable weights is
+  explainable (`?debug=true`), testable, and tunable without retraining; an ML
+  ranker can replace `score()` later behind the same interface.
+- **Profile as a weighted vector average** — cheap to compute, cheap to store
+  (one JSONB column), and the same Qdrant search powers both dedup and the feed.
 - **Transparent scoring, no ML ranker** — the feed score is a documented linear
   combination with configurable weights; explainable and testable first.

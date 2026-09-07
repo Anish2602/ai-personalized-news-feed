@@ -85,6 +85,8 @@ async def qdrant_store():
 
 @pytest_asyncio.fixture
 async def client(db_session) -> AsyncClient:
+    from app.api.v1.deps import get_queue_processing, get_queue_profile_rebuild
+
     app = create_app()
 
     async def _override_session():
@@ -92,6 +94,10 @@ async def client(db_session) -> AsyncClient:
         yield db_session
 
     app.dependency_overrides[get_db_session] = _override_session
+    # No Celery broker in tests — background dispatch is a no-op unless a test
+    # overrides these with a spy.
+    app.dependency_overrides[get_queue_processing] = lambda: (lambda _a: None)
+    app.dependency_overrides[get_queue_profile_rebuild] = lambda: (lambda _u: None)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
