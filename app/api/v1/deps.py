@@ -58,9 +58,7 @@ def get_feed_cache() -> FeedCache:
 
 def get_interaction_service(
     session: SessionDep,
-    queue_profile_rebuild: Annotated[
-        QueueProfileRebuild, Depends(get_queue_profile_rebuild)
-    ],
+    queue_profile_rebuild: Annotated[QueueProfileRebuild, Depends(get_queue_profile_rebuild)],
     feed_cache: Annotated[FeedCache, Depends(get_feed_cache)],
 ) -> InteractionService:
     return InteractionService(

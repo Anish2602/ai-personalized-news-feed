@@ -112,9 +112,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _handle_unexpected(_: Request, exc: Exception) -> JSONResponse:
         logger.exception("unhandled_exception", error=str(exc))
         message = (
-            "Internal server error."
-            if settings.is_production
-            else f"{type(exc).__name__}: {exc}"
+            "Internal server error." if settings.is_production else f"{type(exc).__name__}: {exc}"
         )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

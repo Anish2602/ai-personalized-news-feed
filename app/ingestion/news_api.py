@@ -37,9 +37,7 @@ class NewsAPISource(NewsSource):
         else:
             params["category"] = "technology"
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.get(
-                _ENDPOINT, params=params, headers={"X-Api-Key": self._api_key}
-            )
+            resp = await client.get(_ENDPOINT, params=params, headers={"X-Api-Key": self._api_key})
         if resp.status_code != 200:
             raise UpstreamError(f"NewsAPI returned {resp.status_code}")
 

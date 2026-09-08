@@ -35,8 +35,7 @@ def test_interleave_breaks_long_streaks():
     primaries = [c.topics[0] for c in out]
     # no 3 in a row
     assert not any(
-        primaries[i] == primaries[i + 1] == primaries[i + 2]
-        for i in range(len(primaries) - 2)
+        primaries[i] == primaries[i + 1] == primaries[i + 2] for i in range(len(primaries) - 2)
     )
     # same members, nothing lost
     assert {c.id for c in out} == {c.id for c in ranked}

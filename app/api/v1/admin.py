@@ -61,7 +61,5 @@ async def trigger_ingest(payload: IngestRequest, service: IngestionServiceDep):
 async def rebuild_profile(user_id: UUID, session: SessionDep) -> ProfileResult:
     """Synchronously rebuild a user's interest vector (normally a Celery task)."""
     async with vector_store() as store:
-        service = ProfileService(
-            InteractionRepository(session), ProfileRepository(session), store
-        )
+        service = ProfileService(InteractionRepository(session), ProfileRepository(session), store)
         return await service.rebuild(user_id)

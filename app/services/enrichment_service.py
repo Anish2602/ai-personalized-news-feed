@@ -74,6 +74,4 @@ class EnrichmentService:
             topics=topics,
             summarized=summarized,
         )
-        return EnrichmentResult(
-            article_topics=topics, story_topics=merged, summarized=summarized
-        )
+        return EnrichmentResult(article_topics=topics, story_topics=merged, summarized=summarized)

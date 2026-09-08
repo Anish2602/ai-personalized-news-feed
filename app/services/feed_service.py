@@ -63,8 +63,7 @@ class FeedService:
 
         window = snapshot.items[offset : offset + limit]
         stories = {
-            s.id: s
-            for s in await self.stories.get_many_with_articles([w.story_id for w in window])
+            s.id: s for s in await self.stories.get_many_with_articles([w.story_id for w in window])
         }
         items = [
             self._to_item(w, stories[w.story_id], debug=debug)

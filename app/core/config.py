@@ -189,6 +189,26 @@ class Settings(BaseSettings):
         """Sync SQLAlchemy URL for Alembic. psycopg3 supports sync + async."""
         return self.database_url
 
+    @property
+    def cors_allows_wildcard(self) -> bool:
+        return "*" in self.cors_allow_origins
+
+    def production_issues(self) -> list[str]:
+        """Blocking misconfigurations for a production deployment (checked at
+        startup). Non-production environments ignore these."""
+        if not self.is_production:
+            return []
+        issues: list[str] = []
+        if self.secret_key == "change-me-in-production" or len(self.secret_key) < 16:
+            issues.append("SECRET_KEY is unset/default/too short")
+        if self.debug:
+            issues.append("DEBUG must be false in production")
+        if self.cors_allows_wildcard:
+            issues.append("CORS_ALLOW_ORIGINS must not be '*' in production")
+        if self.llm_enabled and not self.llm_api_key:
+            issues.append("LLM_ENABLED is true but LLM_API_KEY is missing")
+        return issues
+
 
 @lru_cache
 def get_settings() -> Settings:

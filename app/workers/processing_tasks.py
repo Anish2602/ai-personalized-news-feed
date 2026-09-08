@@ -71,9 +71,7 @@ async def _run_pipeline(session: AsyncSession, article_id: UUID) -> dict[str, st
     stories = StoryRepository(session)
     try:
         async with vector_store() as store:
-            dedup = DeduplicationService(
-                articles, stories, store, get_embedding_provider()
-            )
+            dedup = DeduplicationService(articles, stories, store, get_embedding_provider())
             dedup_result = await dedup.deduplicate(article, text=text)
     except (httpx.HTTPError, ConnectionError, TimeoutError, OSError) as exc:
         raise UpstreamError(f"embedding/vector failure: {exc}") from exc
@@ -87,9 +85,7 @@ async def _run_pipeline(session: AsyncSession, article_id: UUID) -> dict[str, st
         Classifier(llm, settings.topic_taxonomy),
         settings.topic_taxonomy,
     )
-    enrich_result = await enrichment.enrich(
-        article, text=text, story_id=dedup_result.story_id
-    )
+    enrich_result = await enrichment.enrich(article, text=text, story_id=dedup_result.story_id)
 
     await repo.mark_completed(job)
     logger.info(
@@ -135,9 +131,7 @@ def process_article(self, article_id: str) -> dict[str, str]:
         will_retry = self.request.retries < self.max_retries
         worker_failures_total.labels(task="process_article").inc()
         run_with_session(lambda s: _record_failure(s, aid, msg, retry=will_retry))
-        logger.warning(
-            "process_article_retry", error=msg, attempt=self.request.retries + 1
-        )
+        logger.warning("process_article_retry", error=msg, attempt=self.request.retries + 1)
         raise self.retry(exc=exc, countdown=_backoff_seconds(self.request.retries)) from exc
     except Exception as exc:  # permanent failure
         msg = str(exc)

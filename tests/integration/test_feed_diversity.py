@@ -33,8 +33,11 @@ async def test_feed_does_not_stack_one_topic(db_session, fake_redis):
         await db_session.flush()
         db_session.add(
             Article(
-                title="t", url=f"https://e.com/{uuid.uuid4().hex}", source="s",
-                story_id=s.id, published_at=now - timedelta(hours=age),
+                title="t",
+                url=f"https://e.com/{uuid.uuid4().hex}",
+                source="s",
+                story_id=s.id,
+                published_at=now - timedelta(hours=age),
             )
         )
     for i in range(2):
@@ -43,8 +46,11 @@ async def test_feed_does_not_stack_one_topic(db_session, fake_redis):
         await db_session.flush()
         db_session.add(
             Article(
-                title="t", url=f"https://e.com/{uuid.uuid4().hex}", source="s",
-                story_id=s.id, published_at=now - timedelta(hours=10 + i),
+                title="t",
+                url=f"https://e.com/{uuid.uuid4().hex}",
+                source="s",
+                story_id=s.id,
+                published_at=now - timedelta(hours=10 + i),
             )
         )
     await db_session.flush()
@@ -62,6 +68,5 @@ async def test_feed_does_not_stack_one_topic(db_session, fake_redis):
     assert len(primaries) == 8
     # FEED_DIVERSITY_MAX_STREAK defaults to 2 -> never 3 identical in a row
     assert not any(
-        primaries[i] == primaries[i + 1] == primaries[i + 2]
-        for i in range(len(primaries) - 2)
+        primaries[i] == primaries[i + 1] == primaries[i + 2] for i in range(len(primaries) - 2)
     )

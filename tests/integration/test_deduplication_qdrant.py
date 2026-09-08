@@ -31,8 +31,12 @@ async def _article(db_session, title: str) -> Article:
 
 def _service(db_session, store) -> DeduplicationService:
     return DeduplicationService(
-        ArticleRepository(db_session), StoryRepository(db_session), store, EMB,
-        threshold=0.9, top_k=5,
+        ArticleRepository(db_session),
+        StoryRepository(db_session),
+        store,
+        EMB,
+        threshold=0.9,
+        top_k=5,
     )
 
 

@@ -30,8 +30,11 @@ async def _seed(db_session, n=3) -> User:
         await db_session.flush()
         db_session.add(
             Article(
-                title="t", url=f"https://e.com/{uuid.uuid4().hex}", source="src",
-                story_id=s.id, published_at=datetime.now(tz=UTC).replace(microsecond=0),
+                title="t",
+                url=f"https://e.com/{uuid.uuid4().hex}",
+                source="src",
+                story_id=s.id,
+                published_at=datetime.now(tz=UTC).replace(microsecond=0),
             )
         )
     await db_session.flush()

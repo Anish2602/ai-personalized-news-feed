@@ -83,9 +83,7 @@ class RecommendationService:
                 semantic_by_story[sid] = max(semantic_by_story.get(sid, 0.0), m.score)
             candidates = await self.stories.get_many_with_articles(list(semantic_by_story))
         else:
-            candidates = await self.stories.recent_with_articles(
-                limit=settings.feed_candidate_pool
-            )
+            candidates = await self.stories.recent_with_articles(limit=settings.feed_candidate_pool)
 
         if not candidates:
             return FeedResult(items=[], cold_start=cold_start)

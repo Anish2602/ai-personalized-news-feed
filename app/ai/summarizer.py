@@ -50,9 +50,7 @@ class Summarizer:
         self.llm = llm
         self.max_attempts = max_attempts or get_settings().llm_output_max_attempts
 
-    async def summarize(
-        self, *, title: str, text: str, taxonomy: list[str]
-    ) -> SummaryResult:
+    async def summarize(self, *, title: str, text: str, taxonomy: list[str]) -> SummaryResult:
         if self.llm is None:
             return self._extractive(title, text)
 

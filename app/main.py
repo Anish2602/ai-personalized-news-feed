@@ -29,6 +29,13 @@ logger = get_logger(__name__)
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings.log_level, json_output=not settings.debug)
+
+    issues = settings.production_issues()
+    if issues:
+        for issue in issues:
+            logger.error("production_config_issue", issue=issue)
+        raise RuntimeError(f"Refusing to start in production: {'; '.join(issues)}")
+
     logger.info("app_startup", environment=settings.environment, app=settings.app_name)
     yield
     from app.cache.redis import close_redis
@@ -45,18 +52,28 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version="0.1.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
+        # OpenAPI UI is disabled in production.
+        docs_url=None if settings.is_production else "/docs",
+        redoc_url=None if settings.is_production else "/redoc",
+        openapi_url=None if settings.is_production else "/openapi.json",
         lifespan=lifespan,
     )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_allow_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # Middleware executes outermost-first in reverse order of registration, so
+    # these are added inner→outer: security headers → rate limit → request
+    # context → CORS. CORS ends up outermost so even a 429 gets CORS headers.
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        return response
+
+    if settings.rate_limit_enabled:
+        from app.core.rate_limit import RateLimitMiddleware
+
+        app.add_middleware(RateLimitMiddleware, settings=settings)
 
     @app.middleware("http")
     async def request_context(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -84,6 +101,16 @@ def create_app() -> FastAPI:
         )
         clear_context()
         return response
+
+    # Added last -> outermost: CORS wraps everything, including error responses.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins,
+        # allow_credentials + a wildcard origin is invalid per the CORS spec.
+        allow_credentials=not settings.cors_allows_wildcard,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     register_exception_handlers(app)
     app.include_router(health_router)

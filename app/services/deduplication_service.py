@@ -59,9 +59,7 @@ class DeduplicationService:
 
     async def deduplicate(self, article: Article, *, text: str) -> DeduplicationResult:
         vector = await self.embedder.embed_text(text)
-        matches = await self.vectors.search(
-            vector, limit=self.top_k, exclude_id=str(article.id)
-        )
+        matches = await self.vectors.search(vector, limit=self.top_k, exclude_id=str(article.id))
         best = matches[0] if matches else None
 
         if best is not None and best.score >= self.threshold:
@@ -97,9 +95,7 @@ class DeduplicationService:
                 "article_id": str(article.id),
                 "story_id": str(result.story_id),
                 "source": article.source,
-                "published_at": article.published_at.isoformat()
-                if article.published_at
-                else None,
+                "published_at": article.published_at.isoformat() if article.published_at else None,
             },
         )
         return result

@@ -30,9 +30,7 @@ async def _article(db_session) -> Article:
 
 
 def _svc(db_session, store):
-    return ProfileService(
-        InteractionRepository(db_session), ProfileRepository(db_session), store
-    )
+    return ProfileService(InteractionRepository(db_session), ProfileRepository(db_session), store)
 
 
 async def test_rebuild_builds_vector_from_weighted_interactions(db_session):

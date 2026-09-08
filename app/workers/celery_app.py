@@ -65,9 +65,7 @@ def _bind_task_context(task_id: str, task: Any, **_kwargs: object) -> None:
 def _record_task(task_id: str, task: Any, state: str, **_kwargs: object) -> None:
     started = _task_started_at.pop(task_id, None)
     if started is not None:
-        celery_task_latency_seconds.labels(task=task.name).observe(
-            time.perf_counter() - started
-        )
+        celery_task_latency_seconds.labels(task=task.name).observe(time.perf_counter() - started)
     celery_tasks_total.labels(task=task.name, state=str(state)).inc()
     clear_context()
 

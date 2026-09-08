@@ -63,9 +63,7 @@ class QdrantVectorStore:
         await self.ensure_collection()
         query_filter = None
         if exclude_id is not None:
-            query_filter = models.Filter(
-                must_not=[models.HasIdCondition(has_id=[exclude_id])]
-            )
+            query_filter = models.Filter(must_not=[models.HasIdCondition(has_id=[exclude_id])])
         result = await self._client.query_points(
             collection_name=self._spec.name,
             query=vector,

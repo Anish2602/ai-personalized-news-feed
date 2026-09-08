@@ -26,9 +26,12 @@ def test_postrun_records_metric_and_clears_context():
 
     task = _task(name="app.workers.x.done")
     ca._bind_task_context(task_id="tid-2", task=task)
-    before = REGISTRY.get_sample_value(
-        "celery_tasks_total", {"task": "app.workers.x.done", "state": "SUCCESS"}
-    ) or 0.0
+    before = (
+        REGISTRY.get_sample_value(
+            "celery_tasks_total", {"task": "app.workers.x.done", "state": "SUCCESS"}
+        )
+        or 0.0
+    )
 
     ca._record_task(task_id="tid-2", task=task, state="SUCCESS")
 

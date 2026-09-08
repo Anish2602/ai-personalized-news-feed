@@ -66,9 +66,7 @@ class Classifier:
 
     async def _classify_llm(self, title: str, text: str) -> list[str]:
         messages = [
-            LLMMessage(
-                role="system", content=_SYSTEM.format(taxonomy=", ".join(self.taxonomy))
-            ),
+            LLMMessage(role="system", content=_SYSTEM.format(taxonomy=", ".join(self.taxonomy))),
             LLMMessage(role="user", content=f"Title: {title}\n\n{text}"),
         ]
         raw = await self.llm.complete(messages, json_mode=True, temperature=0.0)

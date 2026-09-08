@@ -53,8 +53,11 @@ async def _story(db_session, *, topics) -> tuple[Story, Article]:
     db_session.add(s)
     await db_session.flush()
     a = Article(
-        title="t", url=f"https://e.com/{uuid.uuid4().hex}", source="Ars Technica",
-        story_id=s.id, published_at=datetime.now(tz=UTC).replace(microsecond=0),
+        title="t",
+        url=f"https://e.com/{uuid.uuid4().hex}",
+        source="Ars Technica",
+        story_id=s.id,
+        published_at=datetime.now(tz=UTC).replace(microsecond=0),
     )
     db_session.add(a)
     await db_session.flush()
@@ -101,7 +104,11 @@ async def test_feed_debug_includes_feature_breakdown(client, db_session, store):
     item = resp.json()["items"][0]
     assert item["features"]["semantic"] > 0
     assert set(item["contributions"]) == {
-        "semantic", "freshness", "popularity", "source_quality", "diversity"
+        "semantic",
+        "freshness",
+        "popularity",
+        "source_quality",
+        "diversity",
     }
 
 

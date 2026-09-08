@@ -58,9 +58,7 @@ class FeedCache:
 
     async def set(self, user_id: UUID, feed: CachedFeed) -> None:
         try:
-            await self._redis.set(
-                self.key(user_id), feed.model_dump_json(), ex=self._ttl
-            )
+            await self._redis.set(self.key(user_id), feed.model_dump_json(), ex=self._ttl)
         except Exception as exc:  # noqa: BLE001
             logger.warning("feed_cache_set_failed", error=str(exc))
 

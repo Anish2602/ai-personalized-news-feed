@@ -76,8 +76,11 @@ async def test_duplicate_article_merges_topics_without_resummarizing(db_session)
     await db_session.flush()
 
     dup = Article(
-        title="AWS re:Invent", url=f"https://ex.com/{uuid.uuid4().hex}",
-        source="Wire2", description="kubernetes on aws cloud", story_id=story.id,
+        title="AWS re:Invent",
+        url=f"https://ex.com/{uuid.uuid4().hex}",
+        source="Wire2",
+        description="kubernetes on aws cloud",
+        story_id=story.id,
     )
     db_session.add(dup)
     await db_session.flush()

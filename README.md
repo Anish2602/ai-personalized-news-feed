@@ -8,9 +8,9 @@ feed over a REST API.
 
 Built as a **modular monolith with background workers** — not microservices.
 
-> **Build status:** Phases 1–8 complete — full pipeline plus observability:
-> Prometheus metrics (API + worker), a provisioned Grafana dashboard, and
-> correlation-ID structured logging across API and workers. See the roadmap below.
+> **Build status:** all 9 phases complete. Full ingestion → dedup → enrichment →
+> personalized ranked feed, with Redis caching, observability, and production
+> hardening. 164 tests, ~87% coverage, green CI.
 
 ---
 
@@ -61,22 +61,22 @@ Docker Compose · GitHub Actions · pytest.
 
 ```
 app/
-├── main.py               # app factory, middleware, wiring
-├── api/v1/                # routers (health now; users/articles/feed/interactions next)
-├── core/                  # config, logging, exceptions, security seam, metrics
+├── main.py               # app factory, middleware chain (CORS · request-context · rate-limit · security-headers)
+├── api/v1/                # routers: users, articles, stories, feed, interactions, admin, health + deps
+├── core/                  # config, logging, exceptions, security seam, metrics, pagination, rate_limit
 ├── db/                    # async engine/session, declarative base, models
-│   └── models/            # user, interest, story, article, interaction, processing
+│   └── models/            # user, interest, story, article, interaction, processing, profile
 ├── schemas/               # Pydantic request/response models
 ├── repositories/          # data-access layer (holds the UoW session, never commits)
 ├── services/              # domain logic (raises typed AppError subclasses)
-├── ai/                    # embeddings + llm provider ABCs, summarizer, classifier, JSON recovery
+├── ai/                    # embedding + llm provider ABCs, summarizer, classifier, JSON recovery, profile_builder
 ├── vector/                # Qdrant client, collection spec, search wrapper
 ├── cache/                 # Redis client + per-user feed snapshot cache
 ├── workers/               # celery app (+ lifecycle/metrics signals), ingest/process/feed tasks, dispatch, sync↔async runtime
 ├── ingestion/             # RSS/news sources + normalizer
 └── ranking/               # scorer (linear), freshness (decay), diversity (rarity + interleave)
-migrations/                # Alembic
-tests/                     # unit + integration
+migrations/                # Alembic (0001 schema · 0002 enrichment fields · 0003 user_profiles)
+tests/                     # unit + integration (+ _fakes.py)
 docker/ monitoring/ scripts/ .github/workflows/
 ```
 
@@ -294,32 +294,39 @@ concurrently; `503` if any is down).
 ## 10. Testing
 
 ```bash
-pytest -q                     # all
-pytest --cov=app              # with coverage
+pytest -q                                    # all (skips infra tests if PG/Qdrant absent)
+pytest --cov=app --cov-report=term-missing   # coverage (CI gate: 80%; currently ~87%)
 ```
 
-- **Unit** (`tests/unit/`, no infra): config, model metadata, cursor codec,
-  interaction weighting, RSS mapping, normalizer, retry backoff, embedding
-  provider (mocked), semantic dedup logic, LLM JSON recovery, summarizer,
-  classifier, **profile builder** (weighted avg, negative weights, cancel→None),
-  freshness decay, ranking scorer, diversity (rarity + deterministic
-  interleave), feed offset cursor codec, **metric registration**, **log-context
-  bind/get/clear**, **Celery observability signals** (task context + metrics +
-  request-id header forwarding).
-- **Integration** (`tests/integration/`, real PostgreSQL + Qdrant): user/article/
-  story/interaction flows, ingestion, processing pipeline (dedup + enrichment +
-  `LLMOutputError` → job FAILED), semantic dedup vs a live Qdrant collection,
-  enrichment, **profile rebuild** (weighted vector from interactions, idempotent),
-  recommendation (relevant > irrelevant, dislike/consumed exclusion, cold
-  start), **`GET /feed`** (auth, cold start, `?debug`, snapshot pagination,
-  bad-cursor 422), **feed cache** (hit/miss, TTL, invalidate, interaction-driven
-  eviction — `fakeredis`), **feed diversity** (no 3-topic streak),
-  `GET /stories`, `POST /admin/ingest`. Each test runs in a rolled-back
-  transaction; Qdrant tests use a throwaway collection. Set `TEST_DATABASE_URL` /
-  `TEST_QDRANT_URL`; tests skip (don't fail) if unreachable.
+**164 tests.** Unit tests need no infrastructure; integration tests need
+PostgreSQL (+ Qdrant for the vector paths) and each runs inside a transaction
+that is rolled back. Set `TEST_DATABASE_URL` / `TEST_QDRANT_URL`; a test **skips
+(does not fail)** when its backend is unreachable. Redis is faked with
+`fakeredis`.
 
-Scoring, dedup, profile-building and cache tests are added alongside their
-features in later phases.
+- **Unit** (`tests/unit/`): config + production-config guard, model metadata,
+  cursor codecs, interaction weighting, RSS mapping, normalizer, retry backoff,
+  embedding provider (mocked model), semantic dedup logic, LLM JSON recovery,
+  summarizer (recover / re-prompt / exhaust / extractive), classifier
+  (taxonomy filter + keyword fallback), profile builder, freshness decay,
+  ranking scorer, diversity (rarity + deterministic interleave), metric
+  registration, log-context binder, Celery observability signals.
+- **Integration** (`tests/integration/`): user / article / story / interaction
+  flows, ingestion (counts, idempotency, source isolation), processing pipeline
+  (dedup + enrichment + `LLMOutputError` → job FAILED), semantic dedup vs a live
+  Qdrant collection, enrichment, profile rebuild, recommendation
+  (relevant > irrelevant, dislike/consumed exclusion, cold start), `GET /feed`
+  (auth, cold start, `?debug`, snapshot pagination, bad cursor → 422), feed
+  cache (hit/miss, TTL, eviction), feed diversity, `GET /stories`,
+  `POST /admin/ingest`, the sync↔async worker runtime, and hardening
+  (rate-limit 429 + fail-open + exemptions, security headers).
+
+### CI ([.github/workflows/ci.yml](.github/workflows/ci.yml))
+
+Three jobs on every push / PR: **lint** (`ruff check`, `ruff format --check`,
+`mypy` advisory) · **test** (Postgres + Redis + Qdrant services, `alembic
+upgrade head`, `alembic check` for drift, `pytest --cov-fail-under=80`) ·
+**docker-build** (builds the image with layer caching).
 
 ---
 
@@ -520,7 +527,7 @@ just uncached.
 | 6 | User profile vector, recommendation engine, transparent ranking, `GET /feed` | ✅ |
 | 7 | Redis feed cache (per-user snapshot), opaque cursor pagination, diversity re-ordering, cache invalidation | ✅ |
 | 8 | Prometheus (API + worker) + provisioned Grafana dashboard, correlation-ID log enrichment | ✅ |
-| 9 | Full test matrix, CI/CD, production hardening | ⏳ |
+| 9 | Test matrix (164 tests / ~87%), 3-job CI, rate limiting, prod config guard, security headers | ✅ |
 
 ---
 
@@ -553,3 +560,52 @@ just uncached.
   on the first miss rather than page-by-page.
 - **Transparent scoring, no ML ranker** — the feed score is a documented linear
   combination with configurable weights; explainable and testable first.
+
+---
+
+## 15. Security & production hardening
+
+- **Secrets** are environment-only (`.env` is git-ignored; `.env.example` is the
+  template). Nothing — credentials, model names, thresholds, weights — is
+  hardcoded.
+- **Startup guard:** in `ENVIRONMENT=production` the app refuses to boot if
+  `SECRET_KEY` is the default/short, `DEBUG` is on, CORS is `*`, or
+  `LLM_ENABLED` is set without a key (`Settings.production_issues()`).
+- **Rate limiting:** Redis fixed-window per `X-User-Id` (else client IP),
+  `RATE_LIMIT_*` configurable, `/health` · `/ready` · `/metrics` exempt. Returns
+  `429` with `Retry-After` and the standard error envelope. **Fails open** if
+  Redis is down.
+- **CORS:** explicit origin list; `allow_credentials` is auto-disabled if origins
+  contain `*` (an invalid combination per the CORS spec).
+- **Headers:** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: no-referrer` on every response.
+- **Error responses:** one envelope `{"error": {"code", "message"}}`; internal
+  exception detail and stack traces are replaced with a generic message when
+  `ENVIRONMENT=production`. OpenAPI docs (`/docs`, `/redoc`, `/openapi.json`) are
+  disabled in production.
+- **Auth seam:** the dev scheme is an `X-User-Id` header, but `get_current_user_id`
+  is the single dependency every route uses — swapping in JWT bearer validation
+  touches nothing in the service or repository layers.
+- **Containers:** non-root user, per-service healthchecks, `depends_on:
+  service_healthy`, and migrations run on API startup (never `create_all`).
+
+---
+
+## 16. Future improvements
+
+- **Auth:** real JWT / OAuth2 (the seam is already in place), API keys for the
+  admin endpoints.
+- **Ranking:** learning-to-rank model behind `score()`; per-user weight
+  personalization; A/B framework on the weight vector; MMR-style diversity
+  instead of the greedy interleave.
+- **Dedup:** evaluate `SEMANTIC_DUPLICATE_THRESHOLD` against a labelled set;
+  cross-encoder re-rank of the top-K before merging; time-windowed story
+  expiry so stale events stop absorbing new articles.
+- **Scale:** `prometheus_client` multiprocess mode (or a push gateway) for
+  multi-worker metrics; read replica for feed queries; Qdrant payload index on
+  `published_at` for time-filtered candidate generation; outbox pattern for the
+  enqueue-after-commit step.
+- **Ops:** OpenTelemetry traces alongside the logs; alert rules on
+  `worker_failures_total` and feed p95; Grafana panels per source/topic.
+- **Product:** WebSocket/SSE feed updates, "why am I seeing this" from the stored
+  contributions, save/read-later lists, digest emails via a beat task.

@@ -103,8 +103,8 @@ async def client(db_session) -> AsyncClient:
     app.dependency_overrides[get_db_session] = _override_session
     # No Celery broker in tests — background dispatch is a no-op unless a test
     # overrides these with a spy.
-    app.dependency_overrides[get_queue_processing] = lambda: (lambda _a: None)
-    app.dependency_overrides[get_queue_profile_rebuild] = lambda: (lambda _u: None)
+    app.dependency_overrides[get_queue_processing] = lambda: lambda _a: None
+    app.dependency_overrides[get_queue_profile_rebuild] = lambda: lambda _u: None
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

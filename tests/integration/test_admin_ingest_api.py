@@ -38,7 +38,7 @@ async def test_sync_ingest_returns_report(client):
 
 
 async def test_sync_ingest_is_idempotent(client):
-    client._transport.app.dependency_overrides[get_queue_processing] = lambda: (lambda _a: None)
+    client._transport.app.dependency_overrides[get_queue_processing] = lambda: lambda _a: None
     payload = {"run_sync": True, "feeds": ["https://ex.com/feed.xml"]}
 
     first = (await client.post("/api/v1/admin/ingest", json=payload)).json()

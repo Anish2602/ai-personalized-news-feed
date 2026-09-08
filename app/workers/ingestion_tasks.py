@@ -36,6 +36,7 @@ def ingest_news(self, feeds: list[str] | None = None) -> dict[str, object]:
     logger.info("ingest_news_start", feeds=len(feed_urls))
 
     try:
+
         async def _op(session):
             service = IngestionService(
                 ArticleRepository(session),

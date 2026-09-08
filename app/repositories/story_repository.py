@@ -23,9 +23,7 @@ class StoryRepository(BaseRepository):
 
     async def get_with_articles(self, story_id: UUID) -> Story | None:
         result = await self.session.execute(
-            select(Story)
-            .where(Story.id == story_id)
-            .options(selectinload(Story.articles))
+            select(Story).where(Story.id == story_id).options(selectinload(Story.articles))
         )
         return result.scalar_one_or_none()
 
@@ -33,9 +31,7 @@ class StoryRepository(BaseRepository):
         if not story_ids:
             return []
         result = await self.session.execute(
-            select(Story)
-            .where(Story.id.in_(story_ids))
-            .options(selectinload(Story.articles))
+            select(Story).where(Story.id.in_(story_ids)).options(selectinload(Story.articles))
         )
         return list(result.scalars().all())
 
@@ -65,9 +61,7 @@ class StoryRepository(BaseRepository):
         return list(result.scalars().all())
 
     async def article_count(self, story_id: UUID) -> int:
-        result = await self.session.execute(
-            select(Article.id).where(Article.story_id == story_id)
-        )
+        result = await self.session.execute(select(Article.id).where(Article.story_id == story_id))
         return len(result.all())
 
     async def set_topics(self, story_id: UUID, topics: list[str]) -> None:

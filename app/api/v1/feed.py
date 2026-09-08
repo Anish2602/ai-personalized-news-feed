@@ -22,6 +22,4 @@ async def get_feed(
 ) -> FeedResponse:
     feed_requests_total.inc()
     page = await service.get_page(user_id, limit=limit, cursor=cursor, debug=debug)
-    return FeedResponse(
-        items=page.items, next_cursor=page.next_cursor, cold_start=page.cold_start
-    )
+    return FeedResponse(items=page.items, next_cursor=page.next_cursor, cold_start=page.cold_start)

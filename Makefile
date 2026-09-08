@@ -10,13 +10,18 @@ install: ## Install project + dev deps into the active environment
 	pip install -e ".[dev]"
 
 lint: ## Ruff lint
-	ruff check app tests
+	ruff check app tests scripts
 
 fmt: ## Ruff format
-	ruff format app tests
+	ruff format app tests scripts
+
+fmt-check: ## Ruff format --check
+	ruff format --check app tests scripts
 
 typecheck: ## mypy
 	mypy app
+
+ci: lint fmt-check test ## Run the CI checks locally
 
 test: ## Run the test suite
 	pytest -q

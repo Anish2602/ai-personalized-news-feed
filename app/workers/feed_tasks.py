@@ -43,9 +43,7 @@ def rebuild_user_profile(self, user_id: str) -> dict[str, object]:
                 )
                 result = await service.rebuild(uid)
             # Profile changed -> the cached feed is stale.
-            cache = FeedCache(
-                get_redis(), ttl_seconds=get_settings().feed_cache_ttl_seconds
-            )
+            cache = FeedCache(get_redis(), ttl_seconds=get_settings().feed_cache_ttl_seconds)
             await cache.invalidate(uid)
             await close_redis()
             return result.model_dump(mode="json")

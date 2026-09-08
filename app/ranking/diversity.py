@@ -35,8 +35,7 @@ def topic_rarity_scores(candidates: Sequence[HasTopics]) -> dict[object, float]:
     total = len(candidates)
     # rarity = 1 - (share of the pool with this primary topic); rescaled to [0,1]
     return {
-        c.id: 1.0 - (counts[_primary_topic(c.topics)] - 1) / max(total - 1, 1)
-        for c in candidates
+        c.id: 1.0 - (counts[_primary_topic(c.topics)] - 1) / max(total - 1, 1) for c in candidates
     }
 
 

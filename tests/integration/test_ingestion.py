@@ -92,9 +92,7 @@ async def test_failing_source_is_isolated(db_session):
             raise RuntimeError("feed down")
 
     service = await _service(db_session, lambda _a: None)
-    reports = await service.ingest_sources(
-        [Boom(), FakeSource("ok", [_item("https://ex.com/ok")])]
-    )
+    reports = await service.ingest_sources([Boom(), FakeSource("ok", [_item("https://ex.com/ok")])])
     assert reports[0].error == "feed down"
     assert reports[0].inserted == 0
     assert reports[1].inserted == 1

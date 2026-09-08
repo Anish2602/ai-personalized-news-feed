@@ -22,9 +22,7 @@ articles_processed_total = Counter(
 duplicate_articles_total = Counter(
     "duplicate_articles_total", "Articles attached to an existing story as duplicates", ["stage"]
 )
-worker_failures_total = Counter(
-    "worker_failures_total", "Celery task failures", ["task"]
-)
+worker_failures_total = Counter("worker_failures_total", "Celery task failures", ["task"])
 
 # --- Embeddings ---
 embedding_requests_total = Counter(
@@ -51,9 +49,7 @@ feed_cache_hits_total = Counter("feed_cache_hits_total", "Feed cache hits")
 feed_cache_misses_total = Counter("feed_cache_misses_total", "Feed cache misses")
 
 # --- HTTP ---
-http_requests_total = Counter(
-    "http_requests_total", "HTTP requests", ["method", "path", "status"]
-)
+http_requests_total = Counter("http_requests_total", "HTTP requests", ["method", "path", "status"])
 http_request_latency_seconds = Histogram(
     "http_request_latency_seconds", "HTTP request latency", ["method", "path"]
 )

@@ -52,9 +52,7 @@ class ProcessingRepository(BaseRepository):
             job.completed_at = _now()
             await self._set_article_status(job.article_id, ArticleProcessingStatus.FAILED)
 
-    async def _set_article_status(
-        self, article_id: UUID, status: ArticleProcessingStatus
-    ) -> None:
+    async def _set_article_status(self, article_id: UUID, status: ArticleProcessingStatus) -> None:
         article = await self.session.get(Article, article_id)
         if article is not None:
             article.processing_status = status
