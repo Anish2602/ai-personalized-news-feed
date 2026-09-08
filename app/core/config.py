@@ -130,8 +130,12 @@ class Settings(BaseSettings):
     source_quality: dict[str, float] = Field(default_factory=dict)
     source_quality_default: float = 0.5
 
-    # --- Feed cache ---
+    # --- Feed cache + diversity ---
     feed_cache_ttl_seconds: int = 300
+    feed_diversity_max_streak: int = 2
+    feed_cache_invalidate_types: list[str] = Field(
+        default_factory=lambda: ["LIKE", "DISLIKE", "SAVE", "SHARE", "SKIP"]
+    )
 
     # --- Celery task policy ---
     task_max_retries: int = 3

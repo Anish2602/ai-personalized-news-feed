@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from uuid import UUID
 
+from app.cache.feed_cache import FeedCache
 from app.core.config import get_settings
 from app.core.exceptions import NotFoundError
 from app.core.logging import get_logger
@@ -29,11 +30,14 @@ class InteractionService:
         users: UserRepository,
         articles: ArticleRepository,
         queue_profile_rebuild: QueueProfileRebuild | None = None,
+        feed_cache: FeedCache | None = None,
     ) -> None:
         self.interactions = interactions
         self.users = users
         self.articles = articles
         self._queue_profile_rebuild = queue_profile_rebuild or (lambda _uid: None)
+        self._feed_cache = feed_cache
+        self._settings = get_settings()
 
     async def record(self, payload: InteractionCreate) -> Interaction:
         if await self.users.get(payload.user_id) is None:
@@ -54,8 +58,13 @@ class InteractionService:
             weight=interaction_weight(payload.interaction_type),
         )
         # Recompute the user's interest vector in the background.
-        # Phase 7: also invalidate the user's feed cache on high-signal events.
         self._queue_profile_rebuild(payload.user_id)
+        # Drop the cached feed so the next request reflects this signal.
+        if (
+            self._feed_cache is not None
+            and payload.interaction_type.value in self._settings.feed_cache_invalidate_types
+        ):
+            await self._feed_cache.invalidate(payload.user_id)
         return interaction
 
     async def list_for_user(self, user_id: UUID, *, limit: int = 200) -> list[Interaction]:

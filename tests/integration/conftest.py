@@ -56,6 +56,13 @@ async def db_session(test_engine):
         await conn.close()
 
 
+@pytest.fixture
+def fake_redis():
+    import fakeredis.aioredis
+
+    return fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+
 @pytest_asyncio.fixture
 async def qdrant_store():
     """A throwaway Qdrant collection (skips the test if Qdrant is unreachable)."""

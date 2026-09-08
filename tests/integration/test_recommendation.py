@@ -67,7 +67,7 @@ async def test_relevant_story_ranks_above_irrelevant(db_session):
     store.seed(r_art.id, [1.0, 0.0, 0.0], story_id=relevant.id)
     store.seed(o_art.id, [0.0, 1.0, 0.0], story_id=other.id)
 
-    result = await _svc(db_session, store).generate_feed(user.id, limit=10)
+    result = await _svc(db_session, store).rank_stories(user.id)
 
     assert result.cold_start is False
     ids = [r.story.id for r in result.items]
@@ -88,7 +88,7 @@ async def test_disliked_story_is_excluded(db_session):
     )
     await db_session.flush()
 
-    result = await _svc(db_session, store).generate_feed(user.id, limit=10)
+    result = await _svc(db_session, store).rank_stories(user.id)
     assert [r.story.id for r in result.items] == [s2.id]
 
 
@@ -102,7 +102,7 @@ async def test_consumed_story_is_excluded(db_session):
     )
     await db_session.flush()
 
-    result = await _svc(db_session, store).generate_feed(user.id, limit=10)
+    result = await _svc(db_session, store).rank_stories(user.id)
     assert result.items == []
 
 
@@ -112,7 +112,7 @@ async def test_cold_start_uses_recent_stories(db_session):
     await _story(db_session, vector=[1.0, 0.0, 0.0], topics=["AI"])
     await _story(db_session, vector=[0.0, 1.0, 0.0], topics=["Cloud"])
 
-    result = await _svc(db_session, store).generate_feed(user.id, limit=10)
+    result = await _svc(db_session, store).rank_stories(user.id)
     assert result.cold_start is True
     assert len(result.items) == 2
     assert all(r.semantic_similarity == 0.0 for r in result.items)

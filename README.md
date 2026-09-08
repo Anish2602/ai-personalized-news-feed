@@ -8,9 +8,9 @@ feed over a REST API.
 
 Built as a **modular monolith with background workers** — not microservices.
 
-> **Build status:** Phases 1–6 complete — through the recommendation engine:
-> user interest vectors, `GET /feed` with a transparent linear ranking function.
-> See the roadmap below.
+> **Build status:** Phases 1–7 complete — recommendation engine + Redis feed
+> caching, opaque cursor pagination, and topic-diversity re-ordering. See the
+> roadmap below.
 
 ---
 
@@ -71,7 +71,7 @@ app/
 ├── services/              # domain logic (raises typed AppError subclasses)
 ├── ai/                    # embeddings + llm provider ABCs, summarizer, classifier, JSON recovery
 ├── vector/                # Qdrant client, collection spec, search wrapper
-├── cache/                 # Redis client (feed cache in Phase 7)
+├── cache/                 # Redis client + per-user feed snapshot cache
 ├── workers/               # celery app + ingest/process/feed tasks + sync↔async runtime
 ├── ingestion/             # RSS/news sources + normalizer
 └── ranking/               # scorer (linear), freshness (decay), diversity (rarity + interleave)
@@ -196,7 +196,7 @@ schema authority.
 | GET | `/articles/{article_id}` | Article detail (incl. `topics`) |
 | GET | `/stories` | Cursor-paginated stories (canonical title, AI summary, key points, topics) |
 | GET | `/stories/{story_id}` | Story detail — summary, key points, topics, source list, member articles |
-| GET | `/feed` | Personalized ranked stories for `X-User-Id`. `?limit=`, `?debug=true` for the per-feature score breakdown |
+| GET | `/feed` | Personalized ranked stories for `X-User-Id`. `?limit=`, `?cursor=` (opaque), `?debug=true` for the per-feature score breakdown. Returns `{items, next_cursor, cold_start}` |
 | POST | `/interactions` | Record VIEW/CLICK/LIKE/DISLIKE/SAVE/SKIP/SHARE (`404` if user/article unknown); triggers a profile rebuild |
 | POST | `/admin/ingest` | Trigger ingestion. `202` + `task_id` (async), or `{"run_sync": true}` to run in-process and get the per-source report |
 | POST | `/admin/profile/{user_id}/rebuild` | Synchronously rebuild a user's interest vector (normally a Celery task) |
@@ -257,14 +257,16 @@ pytest --cov=app              # with coverage
   interaction weighting, RSS mapping, normalizer, retry backoff, embedding
   provider (mocked), semantic dedup logic, LLM JSON recovery, summarizer,
   classifier, **profile builder** (weighted avg, negative weights, cancel→None),
-  **freshness decay**, **ranking scorer** (weighted sum, contributions,
-  normalization), **diversity** (rarity, deterministic interleave).
+  freshness decay, ranking scorer, diversity (rarity + deterministic
+  interleave), **feed offset cursor** codec.
 - **Integration** (`tests/integration/`, real PostgreSQL + Qdrant): user/article/
   story/interaction flows, ingestion, processing pipeline (dedup + enrichment +
   `LLMOutputError` → job FAILED), semantic dedup vs a live Qdrant collection,
   enrichment, **profile rebuild** (weighted vector from interactions, idempotent),
-  **recommendation** (relevant > irrelevant, dislike/consumed exclusion, cold
-  start), **`GET /feed`** (auth required, cold start, `?debug` breakdown),
+  recommendation (relevant > irrelevant, dislike/consumed exclusion, cold
+  start), **`GET /feed`** (auth, cold start, `?debug`, snapshot pagination,
+  bad-cursor 422), **feed cache** (hit/miss, TTL, invalidate, interaction-driven
+  eviction — `fakeredis`), **feed diversity** (no 3-topic streak),
   `GET /stories`, `POST /admin/ingest`. Each test runs in a rolled-back
   transaction; Qdrant tests use a throwaway collection. Set `TEST_DATABASE_URL` /
   `TEST_QDRANT_URL`; tests skip (don't fail) if unreachable.
@@ -430,13 +432,32 @@ load profile
       source_quality  mean SOURCE_QUALITY[source] (else SOURCE_QUALITY_DEFAULT)
       diversity       primary-topic rarity within the pool
   → final = 0.55·sem + 0.20·fresh + 0.10·pop + 0.10·src + 0.05·div   (RANK_WEIGHT_*)
-  → sort desc, take limit
+  → sort desc
+  → interleave_by_topic(max_streak = FEED_DIVERSITY_MAX_STREAK)   # no 3 same-topic in a row
 ```
 
 No ML ranker — the score is a documented linear combination and `?debug=true`
-returns every feature value and its weighted contribution. Diversity
-re-ordering (`interleave_by_topic`) and feed caching arrive in Phase 7; the
-diversity *feature* and the interleave function are already implemented + tested.
+returns every feature value and its weighted contribution.
+
+### Feed cache & pagination
+
+```
+GET /feed?cursor=…&limit=20
+  → decode cursor → offset (opaque base64 of {"o": N}; malformed → 422)
+  → Redis GET feed:user:{user_id}
+      hit  → feed_cache_hits_total++
+      miss → rank_stories() → store snapshot (SET … EX FEED_CACHE_TTL_SECONDS)
+             feed_cache_misses_total++ ; feed_generation_latency_seconds observed
+  → slice snapshot[offset : offset+limit], hydrate those stories from Postgres
+  → next_cursor = {"o": offset+limit}  (null at the end)
+```
+
+**One key per user holds the whole ranked snapshot** — every page of a
+pagination walk comes from the same ranking, and a single `DEL` invalidates the
+entire feed. `InteractionService` drops the key on profile-changing interactions
+(`FEED_CACHE_INVALIDATE_TYPES`); `rebuild_user_profile` drops it after
+recomputing the vector. A cache outage is swallowed — the feed is still served,
+just uncached.
 
 ---
 
@@ -450,7 +471,7 @@ diversity *feature* and the interleave function are already implemented + tested
 | 4 | Embeddings (sentence-transformers), Qdrant, semantic dedup into stories | ✅ |
 | 5 | LLM summaries + topic classification (structured output, offline fallbacks) | ✅ |
 | 6 | User profile vector, recommendation engine, transparent ranking, `GET /feed` | ✅ |
-| 7 | Feed caching, cursor pagination, diversity re-ordering | ⏳ |
+| 7 | Redis feed cache (per-user snapshot), opaque cursor pagination, diversity re-ordering, cache invalidation | ✅ |
 | 8 | Prometheus/Grafana dashboards, log enrichment | ⏳ |
 | 9 | Full test matrix, CI/CD, production hardening | ⏳ |
 
@@ -478,5 +499,10 @@ diversity *feature* and the interleave function are already implemented + tested
   ranker can replace `score()` later behind the same interface.
 - **Profile as a weighted vector average** — cheap to compute, cheap to store
   (one JSONB column), and the same Qdrant search powers both dedup and the feed.
+- **One feed-cache key per user, not per page** — the spec's
+  `feed:user:{id}:{cursor}` shape is folded into an opaque offset cursor over a
+  single cached snapshot. Pagination stays consistent mid-walk and invalidation
+  is one `DEL` instead of a key scan; the cost is regenerating the whole snapshot
+  on the first miss rather than page-by-page.
 - **Transparent scoring, no ML ranker** — the feed score is a documented linear
   combination with configurable weights; explainable and testable first.

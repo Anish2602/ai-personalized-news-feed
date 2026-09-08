@@ -12,6 +12,9 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache.feed_cache import FeedCache
+from app.cache.redis import get_redis
+from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.repositories.article_repository import ArticleRepository
 from app.repositories.interaction_repository import InteractionRepository
@@ -20,6 +23,7 @@ from app.repositories.profile_repository import ProfileRepository
 from app.repositories.story_repository import StoryRepository
 from app.repositories.user_repository import UserRepository
 from app.services.article_service import ArticleService
+from app.services.feed_service import FeedService
 from app.services.ingestion_service import IngestionService, QueueProcessing
 from app.services.interaction_service import InteractionService, QueueProfileRebuild
 from app.services.recommendation_service import RecommendationService
@@ -48,30 +52,35 @@ def get_queue_profile_rebuild() -> QueueProfileRebuild:
     return enqueue_profile_rebuild
 
 
+def get_feed_cache() -> FeedCache:
+    return FeedCache(get_redis(), ttl_seconds=get_settings().feed_cache_ttl_seconds)
+
+
 def get_interaction_service(
     session: SessionDep,
     queue_profile_rebuild: Annotated[
         QueueProfileRebuild, Depends(get_queue_profile_rebuild)
     ],
+    feed_cache: Annotated[FeedCache, Depends(get_feed_cache)],
 ) -> InteractionService:
     return InteractionService(
         InteractionRepository(session),
         UserRepository(session),
         ArticleRepository(session),
         queue_profile_rebuild,
+        feed_cache,
     )
 
 
-async def get_recommendation_service(
-    session: SessionDep,
-) -> AsyncIterator[RecommendationService]:
+async def get_feed_service(session: SessionDep) -> AsyncIterator[FeedService]:
     async with vector_store() as store:
-        yield RecommendationService(
+        recommender = RecommendationService(
             StoryRepository(session),
             InteractionRepository(session),
             ProfileRepository(session),
             store,
         )
+        yield FeedService(recommender, get_feed_cache(), StoryRepository(session))
 
 
 def get_queue_processing() -> QueueProcessing:
@@ -93,8 +102,6 @@ def get_ingestion_service(
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
 ArticleServiceDep = Annotated[ArticleService, Depends(get_article_service)]
 StoryServiceDep = Annotated[StoryService, Depends(get_story_service)]
-RecommendationServiceDep = Annotated[
-    RecommendationService, Depends(get_recommendation_service)
-]
+FeedServiceDep = Annotated[FeedService, Depends(get_feed_service)]
 InteractionServiceDep = Annotated[InteractionService, Depends(get_interaction_service)]
 IngestionServiceDep = Annotated[IngestionService, Depends(get_ingestion_service)]

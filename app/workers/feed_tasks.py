@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.cache.feed_cache import FeedCache
+from app.cache.redis import close_redis, get_redis
+from app.core.config import get_settings
 from app.core.logging import bind_context, clear_context, get_logger
 from app.core.metrics import worker_failures_total
 from app.repositories.interaction_repository import InteractionRepository
@@ -39,7 +42,13 @@ def rebuild_user_profile(self, user_id: str) -> dict[str, object]:
                     InteractionRepository(session), ProfileRepository(session), store
                 )
                 result = await service.rebuild(uid)
-                return result.model_dump(mode="json")
+            # Profile changed -> the cached feed is stale.
+            cache = FeedCache(
+                get_redis(), ttl_seconds=get_settings().feed_cache_ttl_seconds
+            )
+            await cache.invalidate(uid)
+            await close_redis()
+            return result.model_dump(mode="json")
 
         return run_with_session(_op)
     except Exception as exc:

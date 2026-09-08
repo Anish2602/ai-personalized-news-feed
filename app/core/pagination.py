@@ -34,6 +34,19 @@ def decode_cursor(cursor: str) -> dict[str, Any]:
     return payload
 
 
+def encode_offset_cursor(offset: int) -> str:
+    """Cursor for slicing a materialized, cached list (e.g. the feed snapshot)."""
+    return encode_cursor({"o": offset})
+
+
+def decode_offset_cursor(cursor: str) -> int:
+    payload = decode_cursor(cursor)
+    offset = payload.get("o")
+    if not isinstance(offset, int) or offset < 0:
+        raise ValidationError("Malformed pagination cursor.")
+    return offset
+
+
 def encode_keyset_cursor(created_at: datetime, id_: Any) -> str:
     """Cursor for a ``(created_at DESC, id DESC)`` ordering."""
     return encode_cursor({"ts": created_at.isoformat(), "id": str(id_)})

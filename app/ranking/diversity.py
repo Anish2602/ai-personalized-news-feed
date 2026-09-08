@@ -12,13 +12,16 @@ Two pieces, both deterministic:
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
-from typing import Protocol
+from collections.abc import Callable, Sequence
+from typing import Protocol, TypeVar
 
 
 class HasTopics(Protocol):
     id: object
     topics: Sequence[str]
+
+
+T = TypeVar("T")
 
 
 def _primary_topic(topics: Sequence[str]) -> str:
@@ -38,12 +41,15 @@ def topic_rarity_scores(candidates: Sequence[HasTopics]) -> dict[object, float]:
 
 
 def interleave_by_topic(
-    ranked: Sequence[HasTopics], *, max_streak: int = 2
-) -> list[HasTopics]:
+    ranked: Sequence[T],
+    *,
+    max_streak: int = 2,
+    topic_of: Callable[[T], Sequence[str]] = lambda x: x.topics,  # type: ignore[attr-defined]
+) -> list[T]:
     """Reorder a ranked list so no primary topic appears more than ``max_streak``
     times consecutively, disturbing the original order as little as possible."""
     remaining = list(ranked)
-    out: list[HasTopics] = []
+    out: list[T] = []
     streak_topic: str | None = None
     streak = 0
 
@@ -51,11 +57,11 @@ def interleave_by_topic(
         pick_idx = 0
         if streak >= max_streak:
             for i, cand in enumerate(remaining):
-                if _primary_topic(cand.topics) != streak_topic:
+                if _primary_topic(topic_of(cand)) != streak_topic:
                     pick_idx = i
                     break
         cand = remaining.pop(pick_idx)
-        topic = _primary_topic(cand.topics)
+        topic = _primary_topic(topic_of(cand))
         if topic == streak_topic:
             streak += 1
         else:

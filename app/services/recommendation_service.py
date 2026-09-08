@@ -1,12 +1,12 @@
-"""Personalized feed generation.
+"""Personalized ranking.
 
     load profile → candidate stories (Qdrant search by profile vector) → drop
-    consumed/disliked → compute ranking features → transparent linear score →
-    sort → top N.
+    consumed/disliked → per-story ranking features → transparent linear score →
+    sort → topic-diversity interleave.
 
-Diversity re-ordering and caching are layered on in Phase 7. When the user has
-no profile yet (cold start) the semantic term is 0 and the feed falls back to
-freshness + popularity + source quality.
+Returns the *full* ranked list; slicing into pages and caching is the
+``FeedService``'s job. Cold start (no profile) → semantic term is 0 and the feed
+falls back to freshness + popularity + source quality.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.models.interaction import InteractionType
 from app.db.models.story import Story
-from app.ranking.diversity import topic_rarity_scores
+from app.ranking.diversity import interleave_by_topic, topic_rarity_scores
 from app.ranking.freshness import freshness_score
 from app.ranking.scorer import RankFeatures, RankResult, normalize_counts, score
 from app.repositories.interaction_repository import InteractionRepository
@@ -64,9 +64,8 @@ class RecommendationService:
         self.vectors = vectors
         self._settings = get_settings()
 
-    async def generate_feed(self, user_id: UUID, *, limit: int) -> FeedResult:
+    async def rank_stories(self, user_id: UUID) -> FeedResult:
         settings = self._settings
-        limit = max(1, min(limit, settings.feed_max_limit))
         profile = await self.profiles.get(user_id)
 
         semantic_by_story: dict[UUID, float] = {}
@@ -127,14 +126,19 @@ class RecommendationService:
             )
 
         ranked.sort(key=lambda r: r.rank.score, reverse=True)
+        ordered = interleave_by_topic(
+            ranked,
+            max_streak=settings.feed_diversity_max_streak,
+            topic_of=lambda r: r.story.topics,
+        )
         logger.info(
-            "feed_generated",
+            "feed_ranked",
             user_id=str(user_id),
             candidates=len(candidates),
-            returned=min(limit, len(ranked)),
+            ranked=len(ordered),
             cold_start=cold_start,
         )
-        return FeedResult(items=ranked[:limit], cold_start=cold_start)
+        return FeedResult(items=ordered, cold_start=cold_start)
 
     def _excluded(self, signals: set[InteractionType]) -> bool:
         if InteractionType.DISLIKE in signals:
