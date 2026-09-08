@@ -18,7 +18,7 @@ from app.ai.llm import get_llm_provider
 from app.ai.summarizer import Summarizer
 from app.core.config import get_settings
 from app.core.exceptions import ServiceUnavailableError, UpstreamError
-from app.core.logging import bind_context, clear_context, get_logger
+from app.core.logging import bind_context, get_logger
 from app.core.metrics import articles_processed_total, worker_failures_total
 from app.db.models.processing import ProcessingJobStatus
 from app.repositories.article_repository import ArticleRepository
@@ -124,7 +124,7 @@ async def _record_failure(
     acks_late=True,
 )
 def process_article(self, article_id: str) -> dict[str, str]:
-    bind_context(task_id=self.request.id, article_id=article_id)
+    bind_context(article_id=article_id)  # task_id/request_id bound by celery signal
     aid = UUID(article_id)
     try:
         outcome = run_with_session(lambda s: _run_pipeline(s, aid))
@@ -146,5 +146,3 @@ def process_article(self, article_id: str) -> dict[str, str]:
         run_with_session(lambda s: _record_failure(s, aid, msg, retry=False))
         logger.exception("process_article_failed", error=msg)
         raise
-    finally:
-        clear_context()

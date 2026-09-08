@@ -62,14 +62,16 @@ def create_app() -> FastAPI:
     async def request_context(request: Request, call_next):  # type: ignore[no-untyped-def]
         request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
         clear_context()
-        bind_context(request_id=request_id)
+        # X-User-Id is the dev auth scheme; bind it so every downstream log line
+        # (and any task this request enqueues) carries the user.
+        bind_context(request_id=request_id, user_id=request.headers.get("X-User-Id"))
         start = time.perf_counter()
-        route = request.scope.get("route")
-        path_label = getattr(route, "path", request.url.path)
         try:
             response = await call_next(request)
         finally:
             elapsed = time.perf_counter() - start
+            route = request.scope.get("route")
+            path_label = getattr(route, "path", request.url.path)
             http_request_latency_seconds.labels(request.method, path_label).observe(elapsed)
         http_requests_total.labels(request.method, path_label, response.status_code).inc()
         response.headers["X-Request-Id"] = request_id

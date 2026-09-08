@@ -1,0 +1,130 @@
+{
+  "uid": "ai-news-feed",
+  "title": "AI News Feed",
+  "tags": ["news-feed"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    { "type": "row", "title": "API", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
+    {
+      "type": "timeseries",
+      "title": "HTTP request rate by path",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
+      "targets": [
+        { "expr": "sum by (path) (rate(http_requests_total[5m]))", "legendFormat": "{{path}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP latency p95 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, path) (rate(http_request_latency_seconds_bucket[5m])))",
+          "legendFormat": "{{path}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP 4xx / 5xx rate",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{status=~\"4..\"}[5m]))", "legendFormat": "4xx" },
+        { "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m]))", "legendFormat": "5xx" }
+      ]
+    },
+    { "type": "row", "title": "Feed", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 } },
+    {
+      "type": "stat",
+      "title": "Feed cache hit ratio",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+      "targets": [
+        {
+          "expr": "sum(rate(feed_cache_hits_total[15m])) / clamp_min(sum(rate(feed_cache_hits_total[15m])) + sum(rate(feed_cache_misses_total[15m])), 1)",
+          "legendFormat": "hit ratio"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Feed requests / cache hits / misses",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 6, "y": 10 },
+      "targets": [
+        { "expr": "sum(rate(feed_requests_total[5m]))", "legendFormat": "requests" },
+        { "expr": "sum(rate(feed_cache_hits_total[5m]))", "legendFormat": "hits" },
+        { "expr": "sum(rate(feed_cache_misses_total[5m]))", "legendFormat": "misses" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Feed generation latency p50 / p95 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 10 },
+      "targets": [
+        { "expr": "histogram_quantile(0.5, sum by (le) (rate(feed_generation_latency_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(feed_generation_latency_seconds_bucket[5m])))", "legendFormat": "p95" }
+      ]
+    },
+    { "type": "row", "title": "Ingestion & processing", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 } },
+    {
+      "type": "timeseries",
+      "title": "Articles ingested / processed",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 19 },
+      "targets": [
+        { "expr": "sum(rate(articles_ingested_total[5m]))", "legendFormat": "ingested" },
+        { "expr": "sum by (result) (rate(articles_processed_total[5m]))", "legendFormat": "processed {{result}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Duplicate articles by stage",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 19 },
+      "targets": [
+        { "expr": "sum by (stage) (rate(duplicate_articles_total[5m]))", "legendFormat": "{{stage}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Worker failures & Celery tasks by state",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 19 },
+      "targets": [
+        { "expr": "sum by (task) (rate(worker_failures_total[5m]))", "legendFormat": "fail {{task}}" },
+        { "expr": "sum by (state) (rate(celery_tasks_total[5m]))", "legendFormat": "{{state}}" }
+      ]
+    },
+    { "type": "row", "title": "AI providers", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 } },
+    {
+      "type": "timeseries",
+      "title": "Embedding latency p95 (s) & request rate",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le, provider) (rate(embedding_latency_seconds_bucket[5m])))", "legendFormat": "p95 {{provider}}" },
+        { "expr": "sum by (provider) (rate(embedding_requests_total[5m]))", "legendFormat": "req/s {{provider}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "LLM latency p95 (s) & requests by result",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(llm_latency_seconds_bucket[5m])))", "legendFormat": "p95 {{operation}}" },
+        { "expr": "sum by (result) (rate(llm_requests_total[5m]))", "legendFormat": "{{result}}" }
+      ]
+    }
+  ]
+}

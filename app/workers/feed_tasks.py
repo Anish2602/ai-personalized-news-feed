@@ -7,7 +7,7 @@ from uuid import UUID
 from app.cache.feed_cache import FeedCache
 from app.cache.redis import close_redis, get_redis
 from app.core.config import get_settings
-from app.core.logging import bind_context, clear_context, get_logger
+from app.core.logging import bind_context, get_logger
 from app.core.metrics import worker_failures_total
 from app.repositories.interaction_repository import InteractionRepository
 from app.repositories.profile_repository import ProfileRepository
@@ -32,7 +32,7 @@ def rebuild_user_profile(self, user_id: str) -> dict[str, object]:
     Idempotent — the result depends only on stored interactions + article
     vectors, so a duplicate run produces the same profile.
     """
-    bind_context(task_id=self.request.id, user_id=user_id)
+    bind_context(user_id=user_id)  # task_id/request_id bound by celery signal
     uid = UUID(user_id)
     try:
 
@@ -55,5 +55,3 @@ def rebuild_user_profile(self, user_id: str) -> dict[str, object]:
         worker_failures_total.labels(task="rebuild_user_profile").inc()
         logger.exception("rebuild_user_profile_failed", error=str(exc))
         raise self.retry(exc=exc, countdown=self.default_retry_delay) from exc
-    finally:
-        clear_context()

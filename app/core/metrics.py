@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from prometheus_client import Counter, Histogram
 
+from app.core.logging import get_logger
+
+_logger = get_logger(__name__)
+
 # --- Ingestion / processing ---
 articles_ingested_total = Counter(
     "articles_ingested_total", "Articles persisted by ingestion", ["source"]
@@ -53,3 +57,27 @@ http_requests_total = Counter(
 http_request_latency_seconds = Histogram(
     "http_request_latency_seconds", "HTTP request latency", ["method", "path"]
 )
+
+# --- Celery task lifecycle (bound by signals in celery_app) ---
+celery_tasks_total = Counter(
+    "celery_tasks_total", "Celery tasks by terminal state", ["task", "state"]
+)
+celery_task_latency_seconds = Histogram(
+    "celery_task_latency_seconds", "Celery task run time", ["task"]
+)
+
+
+def start_worker_metrics_server(port: int) -> None:
+    """Expose the default registry over HTTP from inside a Celery worker.
+
+    Prefork workers fork after this runs, so with concurrency > 1 counts are
+    per-child; set ``PROMETHEUS_MULTIPROC_DIR`` and use a multiprocess registry,
+    or run the worker with ``--pool=solo``/``threads`` for exact numbers.
+    """
+    from prometheus_client import start_http_server
+
+    try:
+        start_http_server(port)
+        _logger.info("worker_metrics_server_started", port=port)
+    except OSError as exc:  # port already bound (e.g. a second worker on one host)
+        _logger.warning("worker_metrics_server_skipped", port=port, error=str(exc))

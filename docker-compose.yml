@@ -70,8 +70,10 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     <<: *app-env
-    # Embedded beat (-B) is fine for a single-worker dev stack; run a dedicated
-    # `celery beat` process in production.
+    # Embedded beat (--beat) + single worker process keeps this dev stack simple
+    # and makes the Prometheus metrics on :9100 exact. In production: a dedicated
+    # `celery beat`, and scale workers as replicas (each its own metrics port) or
+    # switch prometheus_client to multiprocess mode.
     command:
       - celery
       - -A
@@ -79,7 +81,9 @@ services:
       - worker
       - --beat
       - --loglevel=INFO
-      - --concurrency=2
+      - --concurrency=1
+    ports:
+      - "9100:9100"
     depends_on:
       api:
         condition: service_healthy
@@ -102,8 +106,10 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
     volumes:
-      - ./monitoring/grafana:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
     ports:
       - "3000:3000"
     depends_on:

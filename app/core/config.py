@@ -141,6 +141,9 @@ class Settings(BaseSettings):
     task_max_retries: int = 3
     task_retry_backoff_seconds: int = 10
 
+    # --- Observability ---
+    worker_metrics_port: int = 9100
+
     @field_validator("log_level")
     @classmethod
     def _upper_log_level(cls, v: str) -> str:

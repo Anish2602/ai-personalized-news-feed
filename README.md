@@ -8,9 +8,9 @@ feed over a REST API.
 
 Built as a **modular monolith with background workers** — not microservices.
 
-> **Build status:** Phases 1–7 complete — recommendation engine + Redis feed
-> caching, opaque cursor pagination, and topic-diversity re-ordering. See the
-> roadmap below.
+> **Build status:** Phases 1–8 complete — full pipeline plus observability:
+> Prometheus metrics (API + worker), a provisioned Grafana dashboard, and
+> correlation-ID structured logging across API and workers. See the roadmap below.
 
 ---
 
@@ -72,7 +72,7 @@ app/
 ├── ai/                    # embeddings + llm provider ABCs, summarizer, classifier, JSON recovery
 ├── vector/                # Qdrant client, collection spec, search wrapper
 ├── cache/                 # Redis client + per-user feed snapshot cache
-├── workers/               # celery app + ingest/process/feed tasks + sync↔async runtime
+├── workers/               # celery app (+ lifecycle/metrics signals), ingest/process/feed tasks, dispatch, sync↔async runtime
 ├── ingestion/             # RSS/news sources + normalizer
 └── ranking/               # scorer (linear), freshness (decay), diversity (rarity + interleave)
 migrations/                # Alembic
@@ -238,11 +238,56 @@ curl -s -XPOST $API/admin/ingest -H 'content-type: application/json' -d '{"run_s
 
 ## 9. Observability
 
-- **Structured logs:** one JSON object per line (structlog). Middleware binds
-  `request_id` (returned as `X-Request-Id`); workers will bind `task_id`,
-  `article_id`, `user_id`.
-- **Metrics:** defined in `app/core/metrics.py`, exposed at `/metrics`
-  (`http_requests_total`, `feed_cache_hits_total`, `llm_latency_seconds`, …).
+### Structured logging
+
+One JSON object per line (structlog, bridged to stdlib so uvicorn / SQLAlchemy /
+Celery all flow through it). A `contextvars` binder attaches correlation IDs that
+then appear on **every** downstream log line and metric-adjacent event:
+
+| Key | Bound by | Scope |
+| --- | --- | --- |
+| `request_id` | HTTP middleware (accepts inbound `X-Request-Id`, always returns it) | the request |
+| `user_id` | HTTP middleware (from `X-User-Id`); profile/feed tasks | request / task |
+| `task_id`, `task_name` | `task_prerun` Celery signal | the task |
+| `article_id` | `process_article` | the task |
+| `request_id` (on a task) | forwarded as a Celery header by `app/workers/dispatch.py` | the task it enqueued |
+
+So an API request → enqueued task → its logs all share one `request_id`.
+
+### Metrics
+
+Defined once in [app/core/metrics.py](app/core/metrics.py) against the default
+registry (shared by API and workers).
+
+- **API** exposes `GET /metrics`.
+- **Worker** runs a Prometheus HTTP server on `WORKER_METRICS_PORT` (9100),
+  started from a Celery signal.
+
+`articles_ingested_total` · `articles_processed_total` ·
+`duplicate_articles_total{stage}` · `embedding_requests_total` /
+`embedding_latency_seconds` · `llm_requests_total` / `llm_latency_seconds` ·
+`feed_requests_total` · `feed_generation_latency_seconds` ·
+`feed_cache_hits_total` / `feed_cache_misses_total` · `worker_failures_total{task}` ·
+`celery_tasks_total{task,state}` / `celery_task_latency_seconds` ·
+`http_requests_total{method,path,status}` / `http_request_latency_seconds`.
+
+### Dashboards
+
+```bash
+docker compose --profile observability up --build
+```
+
+- Prometheus — <http://localhost:9090> (scrapes `api:8000` and `worker:9100`)
+- Grafana — <http://localhost:3000> (anonymous admin); the **AI News Feed**
+  dashboard is auto-provisioned from
+  [monitoring/grafana/dashboards/news-feed.json](monitoring/grafana/dashboards/news-feed.json)
+  — API traffic/latency/errors, feed cache hit ratio + latency, ingestion &
+  processing rates, worker failures, embedding & LLM latency.
+
+### Health
+
+`GET /health` (liveness) · `GET /ready` (checks PostgreSQL, Redis, Qdrant
+concurrently; `503` if any is down).
 
 ---
 
@@ -258,7 +303,9 @@ pytest --cov=app              # with coverage
   provider (mocked), semantic dedup logic, LLM JSON recovery, summarizer,
   classifier, **profile builder** (weighted avg, negative weights, cancel→None),
   freshness decay, ranking scorer, diversity (rarity + deterministic
-  interleave), **feed offset cursor** codec.
+  interleave), feed offset cursor codec, **metric registration**, **log-context
+  bind/get/clear**, **Celery observability signals** (task context + metrics +
+  request-id header forwarding).
 - **Integration** (`tests/integration/`, real PostgreSQL + Qdrant): user/article/
   story/interaction flows, ingestion, processing pipeline (dedup + enrichment +
   `LLMOutputError` → job FAILED), semantic dedup vs a live Qdrant collection,
@@ -472,7 +519,7 @@ just uncached.
 | 5 | LLM summaries + topic classification (structured output, offline fallbacks) | ✅ |
 | 6 | User profile vector, recommendation engine, transparent ranking, `GET /feed` | ✅ |
 | 7 | Redis feed cache (per-user snapshot), opaque cursor pagination, diversity re-ordering, cache invalidation | ✅ |
-| 8 | Prometheus/Grafana dashboards, log enrichment | ⏳ |
+| 8 | Prometheus (API + worker) + provisioned Grafana dashboard, correlation-ID log enrichment | ✅ |
 | 9 | Full test matrix, CI/CD, production hardening | ⏳ |
 
 ---

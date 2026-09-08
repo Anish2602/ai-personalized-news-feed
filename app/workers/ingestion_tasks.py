@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.config import get_settings
-from app.core.logging import bind_context, clear_context, get_logger
+from app.core.logging import get_logger
 from app.core.metrics import worker_failures_total
 from app.ingestion.rss import RSSNewsSource
 from app.repositories.article_repository import ArticleRepository
@@ -33,7 +33,6 @@ def ingest_news(self, feeds: list[str] | None = None) -> dict[str, object]:
     """Fetch every configured RSS feed and persist new articles. Idempotent."""
     settings = get_settings()
     feed_urls = feeds or settings.news_rss_feeds
-    bind_context(task_id=self.request.id)
     logger.info("ingest_news_start", feeds=len(feed_urls))
 
     try:
@@ -52,8 +51,6 @@ def ingest_news(self, feeds: list[str] | None = None) -> dict[str, object]:
         worker_failures_total.labels(task="ingest_news").inc()
         logger.exception("ingest_news_failed", error=str(exc))
         raise self.retry(exc=exc, countdown=self.default_retry_delay) from exc
-    finally:
-        clear_context()
 
     total_inserted = sum(r["inserted"] for r in reports)
     logger.info("ingest_news_done", inserted=total_inserted, sources=len(reports))

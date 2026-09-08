@@ -71,5 +71,11 @@ def bind_context(**kwargs: Any) -> None:
     structlog.contextvars.bind_contextvars(**{k: v for k, v in kwargs.items() if v is not None})
 
 
+def get_context() -> dict[str, Any]:
+    """Snapshot of the currently-bound context vars (e.g. to propagate the
+    ``request_id`` from an API request onto an enqueued Celery task)."""
+    return dict(structlog.contextvars.get_contextvars())
+
+
 def clear_context() -> None:
     structlog.contextvars.clear_contextvars()
