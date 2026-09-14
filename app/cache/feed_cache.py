@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 class CachedFeedItem(BaseModel):
     story_id: UUID
     primary_article_id: UUID
+    primary_article_url: str
     score: float
     features: RankFeatures
     contributions: dict[str, float]

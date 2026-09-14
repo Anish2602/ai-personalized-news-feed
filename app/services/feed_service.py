@@ -58,7 +58,14 @@ class FeedService:
         cache_hit = snapshot is not None
         if snapshot is None:
             snapshot = await self._build_snapshot(user_id)
-            await self.cache.set(user_id, snapshot)
+            # An empty snapshot is almost always a transient state — nothing
+            # has been ingested/processed yet for a brand-new deployment or a
+            # user who arrived first — and is likely to look completely
+            # different moments later. Caching it for the full TTL would trap
+            # the user on "no stories" long after content actually shows up,
+            # so only cache non-empty results.
+            if snapshot.items:
+                await self.cache.set(user_id, snapshot)
         (feed_cache_hits_total if cache_hit else feed_cache_misses_total).inc()
 
         window = snapshot.items[offset : offset + limit]
@@ -80,19 +87,21 @@ class FeedService:
 
     async def _build_snapshot(self, user_id: UUID) -> CachedFeed:
         result = await self.recommender.rank_stories(user_id)
-        return CachedFeed(
-            generated_at=datetime.now(tz=UTC),
-            cold_start=result.cold_start,
-            items=[
+        items = []
+        for r in result.items:
+            primary = self._primary_article(r.story)
+            items.append(
                 CachedFeedItem(
                     story_id=r.story.id,
-                    primary_article_id=self._primary_article(r.story).id,
+                    primary_article_id=primary.id,
+                    primary_article_url=primary.url,
                     score=r.rank.score,
                     features=r.rank.features,
                     contributions=r.rank.contributions,
                 )
-                for r in result.items
-            ],
+            )
+        return CachedFeed(
+            generated_at=datetime.now(tz=UTC), cold_start=result.cold_start, items=items
         )
 
     @staticmethod
@@ -114,6 +123,7 @@ class FeedService:
             published_at=max(published) if published else story.created_at,
             score=cached.score,
             primary_article_id=cached.primary_article_id,
+            primary_article_url=cached.primary_article_url,
             features=cached.features if debug else None,
             contributions=cached.contributions if debug else None,
         )

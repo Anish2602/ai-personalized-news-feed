@@ -84,6 +84,40 @@ async def test_invalidate_forces_regeneration(db_session, fake_redis):
     assert after.cache_hit is False
 
 
+async def test_empty_feed_is_not_cached(db_session, fake_redis):
+    """A user with no candidate stories yet (nothing ingested/processed) must
+    not have that empty result cached for the full TTL — new content should
+    show up on the very next request, not be hidden behind a stale snapshot."""
+    user = User(email=f"{uuid.uuid4().hex}@e.com", name="U")
+    db_session.add(user)
+    await db_session.flush()
+    cache = FeedCache(fake_redis, ttl_seconds=300)
+    svc = _service(db_session, cache)
+
+    first = await svc.get_page(user.id, limit=10, cursor=None)
+    assert first.items == []
+    assert not await fake_redis.exists(FeedCache.key(user.id))
+
+    # Content arrives after the user's first (empty) look at the feed.
+    story = Story(canonical_title="s", summary="x", topics=["AI"])
+    db_session.add(story)
+    await db_session.flush()
+    db_session.add(
+        Article(
+            title="t",
+            url=f"https://e.com/{uuid.uuid4().hex}",
+            source="src",
+            story_id=story.id,
+            published_at=datetime.now(tz=UTC).replace(microsecond=0),
+        )
+    )
+    await db_session.flush()
+
+    second = await svc.get_page(user.id, limit=10, cursor=None)
+    assert second.cache_hit is False  # not served from a stale empty cache
+    assert len(second.items) == 1
+
+
 async def test_high_signal_interaction_invalidates_via_service(db_session, fake_redis):
     from app.db.models.interaction import InteractionType
     from app.repositories.article_repository import ArticleRepository

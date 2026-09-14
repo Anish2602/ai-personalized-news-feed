@@ -1,16 +1,19 @@
 # AI-Personalized News Feed
 
-An AI-powered news aggregation and recommendation backend. It ingests articles
-from RSS sources, deduplicates them semantically into canonical **stories**,
-enriches them with embeddings, AI summaries and topic labels, learns a per-user
-interest vector from interactions, and serves a personalized, diversity-aware
-feed over a REST API.
+An AI-powered news aggregation and recommendation backend, plus a small React
+reader on top of it. The backend ingests articles from RSS sources,
+deduplicates them semantically into canonical **stories**, enriches them with
+embeddings, AI summaries and topic labels, learns a per-user interest vector
+from interactions, and serves a personalized, diversity-aware feed over a REST
+API; the [`web/`](web/) app is a thin client on that API — nothing in `web/`
+talks to Postgres, Redis, or Qdrant directly.
 
 Built as a **modular monolith with background workers** — not microservices.
 
-> **Build status:** all 9 phases complete. Full ingestion → dedup → enrichment →
-> personalized ranked feed, with Redis caching, observability, and production
-> hardening. 164 tests, ~87% coverage, green CI.
+> **Build status:** all 9 backend phases complete, plus a web frontend. Full
+> ingestion → dedup → enrichment → personalized ranked feed, with Redis
+> caching, observability, and production hardening. 167 backend tests, ~87%
+> coverage, green CI.
 
 ---
 
@@ -18,7 +21,8 @@ Built as a **modular monolith with background workers** — not microservices.
 
 ```mermaid
 flowchart TD
-    Client[[Client]] --> API[FastAPI API Server]
+    Browser[[Browser]] --> Web[React web app]
+    Web -- REST + X-User-Id --> API[FastAPI API Server]
 
     API --> PG[(PostgreSQL)]
     API --> REDIS[(Redis)]
@@ -50,10 +54,12 @@ isolated in `repositories/`.
 
 ## 2. Technology stack
 
-Python 3.12 · FastAPI · Pydantic v2 · SQLAlchemy 2 (async) · Alembic ·
-PostgreSQL 16 · Redis 7 · Celery 5 · Qdrant · sentence-transformers ·
+**Backend:** Python 3.12 · FastAPI · Pydantic v2 · SQLAlchemy 2 (async) ·
+Alembic · PostgreSQL 16 · Redis 7 · Celery 5 · Qdrant · sentence-transformers ·
 OpenAI-compatible LLM (behind an abstraction) · Prometheus · structlog ·
 Docker Compose · GitHub Actions · pytest.
+
+**Frontend:** React 19 · TypeScript · Vite · Tailwind CSS v4 · nginx (prod).
 
 ---
 
@@ -78,6 +84,13 @@ app/
 migrations/                # Alembic (0001 schema · 0002 enrichment fields · 0003 user_profiles)
 tests/                     # unit + integration (+ _fakes.py)
 docker/ monitoring/ scripts/ .github/workflows/
+
+web/                       # React + TypeScript + Tailwind frontend — see web/README.md
+├── src/api/                # typed fetch client + response types (mirrors app/schemas)
+├── src/context/, src/hooks/  # current-user context, useFeed (pagination + optimistic reactions)
+├── src/components/         # Onboarding, Header, FeedList, StoryCard, InterestsPanel
+├── Dockerfile              # multi-stage: node build → static nginx
+└── nginx.conf
 ```
 
 ---
@@ -118,9 +131,12 @@ docker compose up --build
 ```
 
 The `api` container waits for Postgres, runs `alembic upgrade head`, then serves
-on <http://localhost:8000>. Open <http://localhost:8000/docs>.
+on <http://localhost:8000> (docs at `/docs`). The web app builds and serves on
+<http://localhost:3000> — open that, create an account, and hit **Ingest news**
+to pull in real articles.
 
-With Prometheus + Grafana:
+With Prometheus + Grafana (Grafana moves to `:3001` in this mode, since `:3000`
+is the web app):
 
 ```bash
 docker compose --profile observability up --build
@@ -144,6 +160,19 @@ celery -A app.workers.celery_app.celery_app worker --beat --loglevel=INFO
 > native worker on macOS use `--pool=solo` (or `--pool=threads`), or export
 > `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES`. The Docker worker (Linux) is
 > unaffected.
+
+### Frontend, natively
+
+```bash
+cd web
+cp .env.example .env    # VITE_API_BASE_URL, defaults to localhost:8000
+npm install
+npm run dev              # http://localhost:3000, hot reload
+```
+
+Needs the backend reachable at `VITE_API_BASE_URL` and `CORS_ALLOW_ORIGINS` (in
+the root `.env`) to include `http://localhost:3000` — the default already does.
+See [web/README.md](web/README.md) for what the app does and how it's built.
 
 ---
 
@@ -196,12 +225,10 @@ schema authority.
 | GET | `/articles/{article_id}` | Article detail (incl. `topics`) |
 | GET | `/stories` | Cursor-paginated stories (canonical title, AI summary, key points, topics) |
 | GET | `/stories/{story_id}` | Story detail — summary, key points, topics, source list, member articles |
-| GET | `/feed` | Personalized ranked stories for `X-User-Id`. `?limit=`, `?cursor=` (opaque), `?debug=true` for the per-feature score breakdown. Returns `{items, next_cursor, cold_start}` |
+| GET | `/feed` | Personalized ranked stories for `X-User-Id`. `?limit=`, `?cursor=` (opaque), `?debug=true` for the per-feature score breakdown. Each item includes `primary_article_id`/`primary_article_url` (the story's freshest member article) so a client can act on it without a second request. Returns `{items, next_cursor, cold_start}` |
 | POST | `/interactions` | Record VIEW/CLICK/LIKE/DISLIKE/SAVE/SKIP/SHARE (`404` if user/article unknown); triggers a profile rebuild |
 | POST | `/admin/ingest` | Trigger ingestion. `202` + `task_id` (async), or `{"run_sync": true}` to run in-process and get the per-source report |
 | POST | `/admin/profile/{user_id}/rebuild` | Synchronously rebuild a user's interest vector (normally a Celery task) |
-
-*Coming:* `GET /api/v1/feed` (Phase 6).
 
 All errors share one envelope: `{"error": {"code": "...", "message": "..."}}`.
 Every response carries `X-Request-Id`.
@@ -298,7 +325,7 @@ pytest -q                                    # all (skips infra tests if PG/Qdra
 pytest --cov=app --cov-report=term-missing   # coverage (CI gate: 80%; currently ~87%)
 ```
 
-**164 tests.** Unit tests need no infrastructure; integration tests need
+**167 tests.** Unit tests need no infrastructure; integration tests need
 PostgreSQL (+ Qdrant for the vector paths) and each runs inside a transaction
 that is rolled back. Set `TEST_DATABASE_URL` / `TEST_QDRANT_URL`; a test **skips
 (does not fail)** when its backend is unreachable. Redis is faked with
@@ -323,10 +350,12 @@ that is rolled back. Set `TEST_DATABASE_URL` / `TEST_QDRANT_URL`; a test **skips
 
 ### CI ([.github/workflows/ci.yml](.github/workflows/ci.yml))
 
-Three jobs on every push / PR: **lint** (`ruff check`, `ruff format --check`,
-`mypy` advisory) · **test** (Postgres + Redis + Qdrant services, `alembic
-upgrade head`, `alembic check` for drift, `pytest --cov-fail-under=80`) ·
-**docker-build** (builds the image with layer caching).
+Five jobs on every push / PR, all in parallel. Backend: **lint** (`ruff
+check`, `ruff format --check`, `mypy` advisory) · **test** (Postgres + Redis +
+Qdrant services, `alembic upgrade head`, `alembic check` for drift, `pytest
+--cov-fail-under=80`) · **docker-build** (builds `docker/Dockerfile`, layer
+cached). Frontend: **frontend** (`tsc`, `oxlint`, `vite build`) ·
+**docker-build-web** (builds `web/Dockerfile`, layer cached).
 
 ---
 
@@ -527,7 +556,7 @@ just uncached.
 | 6 | User profile vector, recommendation engine, transparent ranking, `GET /feed` | ✅ |
 | 7 | Redis feed cache (per-user snapshot), opaque cursor pagination, diversity re-ordering, cache invalidation | ✅ |
 | 8 | Prometheus (API + worker) + provisioned Grafana dashboard, correlation-ID log enrichment | ✅ |
-| 9 | Test matrix (164 tests / ~87%), 3-job CI, rate limiting, prod config guard, security headers | ✅ |
+| 9 | Test matrix (167 tests / ~87%), 3-job CI, rate limiting, prod config guard, security headers | ✅ |
 
 ---
 

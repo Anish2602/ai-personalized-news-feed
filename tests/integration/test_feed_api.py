@@ -86,6 +86,7 @@ async def test_cold_start_feed_returns_recent_stories(client, db_session):
     assert len(body["items"]) == 2
     assert body["items"][0]["features"] is None  # debug off
     assert body["items"][0]["primary_article_id"]  # interactable without a 2nd request
+    assert body["items"][0]["primary_article_url"].startswith("https://")
 
 
 async def test_feed_debug_includes_feature_breakdown(client, db_session, store):
