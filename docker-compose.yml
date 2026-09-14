@@ -38,7 +38,10 @@ services:
     volumes:
       - qdrantdata:/qdrant/storage
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/6333 && echo ok >&3"]
+      # The qdrant image has no curl/wget/nc, and CMD-SHELL runs via `/bin/sh`
+      # (dash), which doesn't support the `/dev/tcp` redirection — bash does,
+      # and bash is present, so invoke it explicitly instead of via CMD-SHELL.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333 && echo ok >&3"]
       interval: 5s
       timeout: 3s
       retries: 10

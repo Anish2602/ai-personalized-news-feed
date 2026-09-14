@@ -13,20 +13,21 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential curl libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Dependency layer (cached unless pyproject changes) ---
+# `pip install "."` builds this project's own package, which needs the `app`
+# source tree present at build time (setuptools reads it for package
+# discovery/metadata) — so application code must be copied before install,
+# not after. That rules out a separate dependency-only cache layer here.
 COPY pyproject.toml README.md ./
-RUN python -m pip install --upgrade pip \
-    && pip install --extra-index-url https://download.pytorch.org/whl/cpu \
-       "torch>=2.2,<3" \
-    && pip install ".[dev]"
-
-# --- Application code ---
 COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini ./
 COPY scripts ./scripts
 
-RUN pip install --no-deps . && useradd -m appuser && mkdir -p /models && chown -R appuser /app /models
+RUN python -m pip install --upgrade pip \
+    && pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+       "torch>=2.2,<3" \
+    && pip install ".[dev]" \
+    && useradd -m appuser && mkdir -p /models && chown -R appuser /app /models
 USER appuser
 
 EXPOSE 8000
