@@ -106,13 +106,60 @@ erDiagram
     ARTICLES ||--o{ INTERACTIONS : receives
     ARTICLES ||--o{ PROCESSING_JOBS : tracked_by
 
-    USERS { uuid id PK; string email UK; string name; timestamptz created_at; timestamptz updated_at }
-    INTERESTS { uuid id PK; string name UK; timestamptz created_at }
-    USER_INTERESTS { uuid user_id PK,FK; uuid interest_id PK,FK; float weight; timestamptz created_at }
-    STORIES { uuid id PK; string canonical_title; text summary; timestamptz created_at; timestamptz updated_at }
-    ARTICLES { uuid id PK; uuid story_id FK; string title; text description; text content; string url UK; string source; timestamptz published_at; string embedding_reference; enum processing_status; timestamptz created_at }
-    INTERACTIONS { uuid id PK; uuid user_id FK; uuid article_id FK; enum interaction_type; timestamptz created_at }
-    PROCESSING_JOBS { uuid id PK; uuid article_id FK; enum status; int retry_count; text error; timestamptz started_at; timestamptz completed_at }
+    USERS {
+        uuid id PK
+        string email UK
+        string name
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    INTERESTS {
+        uuid id PK
+        string name UK
+        timestamptz created_at
+    }
+    USER_INTERESTS {
+        uuid user_id PK "FK -> users.id"
+        uuid interest_id PK "FK -> interests.id"
+        float weight
+        timestamptz created_at
+    }
+    STORIES {
+        uuid id PK
+        string canonical_title
+        text summary
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    ARTICLES {
+        uuid id PK
+        uuid story_id FK
+        string title
+        text description
+        text content
+        string url UK
+        string source
+        timestamptz published_at
+        string embedding_reference
+        enum processing_status
+        timestamptz created_at
+    }
+    INTERACTIONS {
+        uuid id PK
+        uuid user_id FK
+        uuid article_id FK
+        enum interaction_type
+        timestamptz created_at
+    }
+    PROCESSING_JOBS {
+        uuid id PK
+        uuid article_id FK
+        enum status
+        int retry_count
+        text error
+        timestamptz started_at
+        timestamptz completed_at
+    }
 ```
 
 Enums: `interaction_type` (VIEW, CLICK, LIKE, DISLIKE, SAVE, SKIP, SHARE),
