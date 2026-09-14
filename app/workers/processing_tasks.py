@@ -50,17 +50,26 @@ def _backoff_seconds(attempt: int) -> int:
 
 
 async def _run_pipeline(session: AsyncSession, article_id: UUID) -> dict[str, str]:
+    articles = ArticleRepository(session)
+    article = await articles.get(article_id)
+    if article is None:
+        # The transaction that inserted this article (ingestion, run inside one
+        # big commit at the end of the loop) may simply not have committed yet
+        # by the time this task's own connection reads it — Celery can pick a
+        # task up before its enqueuing transaction lands. That's a transient
+        # race, not a real absence, so it's retryable: if the article truly
+        # never appears, retries exhaust and Celery fails the job permanently
+        # on its own. Checking this before touching processing_jobs also
+        # avoids a FK-violation INSERT against an article row that isn't
+        # visible yet.
+        raise UpstreamError(f"article {article_id} not visible yet")
+
     repo = ProcessingRepository(session)
     job = await repo.get_latest_job(article_id)
     if job is None:
         job = await repo.create_job(article_id)
     if job.status == ProcessingJobStatus.COMPLETED:
         return {"status": "already_completed", "article_id": str(article_id)}
-
-    articles = ArticleRepository(session)
-    article = await articles.get(article_id)
-    if article is None:
-        raise LookupError(f"article {article_id} not found")  # permanent
 
     await repo.mark_processing(job)
 

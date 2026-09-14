@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from app.core.exceptions import LLMOutputError
+from app.core.exceptions import LLMOutputError, UpstreamError
 from app.db.models.article import Article, ArticleProcessingStatus
 from app.db.models.processing import ProcessingJobStatus
 from app.db.models.story import Story
@@ -73,6 +73,15 @@ async def test_malformed_llm_output_fails_the_job(db_session, monkeypatch):
 
     with pytest.raises(LLMOutputError):
         await _run_pipeline(db_session, article.id)
+
+
+async def test_missing_article_is_retryable_not_permanent(db_session):
+    """A Celery worker can pick up process_article before the transaction that
+    inserted the article commits (dual-write race between DB + broker). That
+    must surface as a retryable UpstreamError, not a permanent failure or a
+    raw FK-violation crash — see app/workers/processing_tasks.py."""
+    with pytest.raises(UpstreamError):
+        await _run_pipeline(db_session, uuid.uuid4())
 
 
 async def test_pipeline_is_idempotent(db_session):
