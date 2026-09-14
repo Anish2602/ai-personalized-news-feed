@@ -5,8 +5,9 @@
     sort → topic-diversity interleave.
 
 Returns the *full* ranked list; slicing into pages and caching is the
-``FeedService``'s job. Cold start (no profile) → semantic term is 0 and the feed
-falls back to freshness + popularity + source quality.
+``FeedService``'s job. Cold start (no profile) → semantic term is 0; declared
+interests (topic_affinity) are the main personalization signal until the user
+has liked/saved enough for a real interaction-based profile.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from app.ranking.scorer import RankFeatures, RankResult, normalize_counts, score
 from app.repositories.interaction_repository import InteractionRepository
 from app.repositories.profile_repository import ProfileRepository
 from app.repositories.story_repository import StoryRepository
+from app.repositories.user_repository import UserRepository
 from app.vector.search import VectorStoreProtocol
 
 logger = get_logger(__name__)
@@ -57,11 +59,13 @@ class RecommendationService:
         interactions: InteractionRepository,
         profiles: ProfileRepository,
         vectors: VectorStoreProtocol,
+        users: UserRepository,
     ) -> None:
         self.stories = stories
         self.interactions = interactions
         self.profiles = profiles
         self.vectors = vectors
+        self.users = users
         self._settings = get_settings()
 
     async def rank_stories(self, user_id: UUID) -> FeedResult:
@@ -99,6 +103,10 @@ class RecommendationService:
             {s.id: self._popularity_raw(engagement.get(s.id, {})) for s in candidates}
         )
         rarity = topic_rarity_scores(candidates)
+        interest_weights = await self._interest_weights(user_id)
+        affinity = normalize_counts(
+            {s.id: self._topic_affinity_raw(s, interest_weights) for s in candidates}
+        )
         weights = settings.ranking_weights
         now = datetime.now(tz=UTC)
 
@@ -114,6 +122,7 @@ class RecommendationService:
                 popularity=popularity.get(s.id, 0.0),
                 source_quality=self._source_quality(s),
                 diversity=rarity.get(s.id, 0.0),
+                topic_affinity=affinity.get(s.id, 0.0),
             )
             ranked.append(
                 RankedStory(
@@ -147,6 +156,17 @@ class RecommendationService:
     def _popularity_raw(self, counts: dict[InteractionType, int]) -> float:
         w = self._settings.interaction_weights
         return sum(abs(w[t.value]) * counts.get(t, 0) for t in _POPULARITY_TYPES)
+
+    async def _interest_weights(self, user_id: UUID) -> dict[str, float]:
+        """{interest name -> signed weight}. A user who has never set any
+        interests gets an empty map, which makes topic_affinity a uniform 0
+        for every candidate rather than special-cased."""
+        links = await self.users.list_interests(user_id)
+        return {link.interest.name: link.weight for link in links}
+
+    @staticmethod
+    def _topic_affinity_raw(story: Story, interest_weights: dict[str, float]) -> float:
+        return sum(interest_weights.get(topic, 0.0) for topic in story.topics)
 
     @staticmethod
     def _published_at(story: Story) -> datetime | None:

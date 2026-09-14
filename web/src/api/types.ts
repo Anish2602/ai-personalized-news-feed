@@ -22,6 +22,7 @@ export interface RankFeatures {
   popularity: number
   source_quality: number
   diversity: number
+  topic_affinity: number
 }
 
 export interface FeedItem {

@@ -9,10 +9,11 @@ from app.db.models.article import Article
 from app.db.models.interaction import Interaction, InteractionType
 from app.db.models.profile import UserProfile
 from app.db.models.story import Story
-from app.db.models.user import User
+from app.db.models.user import Interest, User, UserInterest
 from app.repositories.interaction_repository import InteractionRepository
 from app.repositories.profile_repository import ProfileRepository
 from app.repositories.story_repository import StoryRepository
+from app.repositories.user_repository import UserRepository
 from app.services.recommendation_service import RecommendationService
 from tests._fakes import FakeVectorStore
 
@@ -55,6 +56,7 @@ def _svc(db_session, store):
         InteractionRepository(db_session),
         ProfileRepository(db_session),
         store,
+        UserRepository(db_session),
     )
 
 
@@ -116,3 +118,49 @@ async def test_cold_start_uses_recent_stories(db_session):
     assert result.cold_start is True
     assert len(result.items) == 2
     assert all(r.semantic_similarity == 0.0 for r in result.items)
+
+
+async def _add_interest(db_session, user_id, name: str, weight: float) -> None:
+    interest = Interest(name=name)
+    db_session.add(interest)
+    await db_session.flush()
+    db_session.add(UserInterest(user_id=user_id, interest_id=interest.id, weight=weight))
+    await db_session.flush()
+
+
+async def test_declared_interest_boosts_matching_topic_at_cold_start(db_session):
+    """The main point of interests: a brand-new user with zero interactions
+    (semantic=0 everywhere) still gets real personalization from what they
+    told us they like."""
+    user = await _user(db_session)  # no profile -> cold start
+    await _add_interest(db_session, user.id, "AI", weight=3.0)
+
+    matching, _ = await _story(db_session, vector=[1.0, 0.0, 0.0], topics=["AI"])
+    other, _ = await _story(db_session, vector=[0.0, 1.0, 0.0], topics=["Sports"])
+
+    result = await _svc(db_session, FakeVectorStore()).rank_stories(user.id)
+
+    assert result.cold_start is True
+    assert result.items[0].story.id == matching.id
+    by_id = {r.story.id: r.rank.features.topic_affinity for r in result.items}
+    assert by_id[matching.id] > by_id[other.id]
+
+
+async def test_negative_interest_weight_downweights_matching_topic(db_session):
+    user = await _user(db_session)
+    await _add_interest(db_session, user.id, "Sports", weight=-5.0)
+
+    downweighted, _ = await _story(db_session, vector=[1.0, 0.0, 0.0], topics=["Sports"])
+    neutral, _ = await _story(db_session, vector=[0.0, 1.0, 0.0], topics=["Science"])
+
+    result = await _svc(db_session, FakeVectorStore()).rank_stories(user.id)
+
+    assert result.items[0].story.id == neutral.id
+
+
+async def test_no_interests_means_zero_affinity_for_everyone(db_session):
+    user = await _user(db_session)
+    await _story(db_session, vector=[1.0, 0.0, 0.0], topics=["AI"])
+
+    result = await _svc(db_session, FakeVectorStore()).rank_stories(user.id)
+    assert all(r.rank.features.topic_affinity == 0.0 for r in result.items)

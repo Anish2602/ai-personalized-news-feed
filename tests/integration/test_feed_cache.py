@@ -13,6 +13,7 @@ from app.db.models.user import User
 from app.repositories.interaction_repository import InteractionRepository
 from app.repositories.profile_repository import ProfileRepository
 from app.repositories.story_repository import StoryRepository
+from app.repositories.user_repository import UserRepository
 from app.services.feed_service import FeedService
 from app.services.recommendation_service import RecommendationService
 from tests._fakes import FakeVectorStore
@@ -47,6 +48,7 @@ def _service(db_session, cache) -> FeedService:
         InteractionRepository(db_session),
         ProfileRepository(db_session),
         FakeVectorStore(),
+        UserRepository(db_session),
     )
     return FeedService(rec, cache, StoryRepository(db_session))
 
@@ -121,7 +123,6 @@ async def test_empty_feed_is_not_cached(db_session, fake_redis):
 async def test_high_signal_interaction_invalidates_via_service(db_session, fake_redis):
     from app.db.models.interaction import InteractionType
     from app.repositories.article_repository import ArticleRepository
-    from app.repositories.user_repository import UserRepository
     from app.schemas.interaction import InteractionCreate
     from app.services.interaction_service import InteractionService
 

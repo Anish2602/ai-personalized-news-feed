@@ -17,6 +17,7 @@ const FEATURE_LABELS: Record<string, string> = {
   popularity: 'Popularity',
   source_quality: 'Source quality',
   diversity: 'Diversity',
+  topic_affinity: 'Interest match',
 }
 
 interface StoryCardProps {

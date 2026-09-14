@@ -12,6 +12,7 @@ from app.db.models.user import User
 from app.repositories.interaction_repository import InteractionRepository
 from app.repositories.profile_repository import ProfileRepository
 from app.repositories.story_repository import StoryRepository
+from app.repositories.user_repository import UserRepository
 from app.services.feed_service import FeedService
 from app.services.recommendation_service import RecommendationService
 from tests._fakes import FakeVectorStore
@@ -60,6 +61,7 @@ async def test_feed_does_not_stack_one_topic(db_session, fake_redis):
         InteractionRepository(db_session),
         ProfileRepository(db_session),
         FakeVectorStore(),
+        UserRepository(db_session),
     )
     svc = FeedService(rec, FeedCache(fake_redis, ttl_seconds=300), StoryRepository(db_session))
     page = await svc.get_page(user.id, limit=20, cursor=None)

@@ -77,6 +77,7 @@ async def get_feed_service(session: SessionDep) -> AsyncIterator[FeedService]:
             InteractionRepository(session),
             ProfileRepository(session),
             store,
+            UserRepository(session),
         )
         yield FeedService(recommender, get_feed_cache(), StoryRepository(session))
 

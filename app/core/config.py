@@ -114,12 +114,13 @@ class Settings(BaseSettings):
     # --- User profile ---
     profile_max_interactions: int = 200
 
-    # --- Ranking weights ---
-    rank_weight_semantic: float = 0.55
-    rank_weight_freshness: float = 0.20
+    # --- Ranking weights (must sum to 1.0 — see test_ranking_weights_sum_to_one) ---
+    rank_weight_semantic: float = 0.50
+    rank_weight_freshness: float = 0.15
     rank_weight_popularity: float = 0.10
     rank_weight_source_quality: float = 0.10
     rank_weight_diversity: float = 0.05
+    rank_weight_topic_affinity: float = 0.10
     freshness_decay_hours: float = 24.0
     feed_default_limit: int = 20
     feed_max_limit: int = 50
@@ -182,6 +183,7 @@ class Settings(BaseSettings):
             "popularity": self.rank_weight_popularity,
             "source_quality": self.rank_weight_source_quality,
             "diversity": self.rank_weight_diversity,
+            "topic_affinity": self.rank_weight_topic_affinity,
         }
 
     @property

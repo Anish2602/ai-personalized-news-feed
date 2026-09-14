@@ -99,4 +99,6 @@ export const api = {
       method: 'POST',
       body: { feeds: opts.feeds, run_sync: opts.runSync ?? false },
     }),
+
+  getTaxonomy: () => request<{ topics: string[] }>('/taxonomy'),
 }

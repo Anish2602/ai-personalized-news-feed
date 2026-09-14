@@ -35,7 +35,8 @@ export function FeedList({ userId, debug }: { userId: string; debug: boolean }) 
     <div className="space-y-4">
       {coldStart && (
         <Badge tone="slate">
-          Showing recent stories — like a few articles to get a personalized feed
+          Showing recent stories — set some interests or like a few articles to personalize
+          this
         </Badge>
       )}
       {items.map((item) => (

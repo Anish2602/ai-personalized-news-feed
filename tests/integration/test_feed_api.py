@@ -14,6 +14,7 @@ from app.db.models.user import User
 from app.repositories.interaction_repository import InteractionRepository
 from app.repositories.profile_repository import ProfileRepository
 from app.repositories.story_repository import StoryRepository
+from app.repositories.user_repository import UserRepository
 from app.services.feed_service import FeedService
 from app.services.recommendation_service import RecommendationService
 from tests._fakes import FakeVectorStore
@@ -34,6 +35,7 @@ def _override_feed(client, db_session, store, fake_redis):
             InteractionRepository(db_session),
             ProfileRepository(db_session),
             store,
+            UserRepository(db_session),
         )
         cache = FeedCache(fake_redis, ttl_seconds=300)
         return FeedService(recommender, cache, StoryRepository(db_session))
@@ -111,6 +113,7 @@ async def test_feed_debug_includes_feature_breakdown(client, db_session, store):
         "popularity",
         "source_quality",
         "diversity",
+        "topic_affinity",
     }
 
 
