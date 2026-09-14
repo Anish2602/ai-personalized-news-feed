@@ -25,7 +25,8 @@ coverage.xml
 .ruff_cache/
 .DS_Store
 
-# Local model / data caches
+# Local model / data caches (repo-root only — unanchored patterns here would
+# also match source packages like app/db/models/)
 .cache/
-models/
-data/
+/models/
+/data/
