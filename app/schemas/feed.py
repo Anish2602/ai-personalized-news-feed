@@ -17,6 +17,11 @@ class FeedItem(BaseModel):
     article_count: int
     published_at: datetime | None
     score: float
+    # The story's most-recently-published member article. Interactions are
+    # recorded per article (POST /interactions needs an article_id), so the
+    # feed exposes one representative article per story rather than making
+    # the client fetch GET /stories/{id} just to find one to react to.
+    primary_article_id: UUID
     # Populated only when ?debug=true
     features: RankFeatures | None = None
     contributions: dict[str, float] | None = None

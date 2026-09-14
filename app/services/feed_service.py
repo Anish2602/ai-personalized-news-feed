@@ -86,6 +86,7 @@ class FeedService:
             items=[
                 CachedFeedItem(
                     story_id=r.story.id,
+                    primary_article_id=self._primary_article(r.story).id,
                     score=r.rank.score,
                     features=r.rank.features,
                     contributions=r.rank.contributions,
@@ -93,6 +94,12 @@ class FeedService:
                 for r in result.items
             ],
         )
+
+    @staticmethod
+    def _primary_article(story: Story):
+        """The story's freshest member article — used as the one clients
+        record interactions (like/dislike/save/...) against."""
+        return max(story.articles, key=lambda a: a.published_at or a.created_at)
 
     @staticmethod
     def _to_item(cached: CachedFeedItem, story: Story, *, debug: bool) -> FeedItem:
@@ -106,6 +113,7 @@ class FeedService:
             article_count=len(story.articles),
             published_at=max(published) if published else story.created_at,
             score=cached.score,
+            primary_article_id=cached.primary_article_id,
             features=cached.features if debug else None,
             contributions=cached.contributions if debug else None,
         )

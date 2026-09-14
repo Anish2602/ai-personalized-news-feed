@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -85,6 +85,7 @@ async def test_cold_start_feed_returns_recent_stories(client, db_session):
     assert body["cold_start"] is True
     assert len(body["items"]) == 2
     assert body["items"][0]["features"] is None  # debug off
+    assert body["items"][0]["primary_article_id"]  # interactable without a 2nd request
 
 
 async def test_feed_debug_includes_feature_breakdown(client, db_session, store):
@@ -130,6 +131,37 @@ async def test_feed_paginates_over_a_stable_snapshot(client, db_session):
         if not cursor:
             break
     assert len(seen) == len(set(seen)) == 5
+
+
+async def test_primary_article_id_is_the_freshest_member(client, db_session):
+    """A story can aggregate several duplicate articles; the feed should point
+    interactions at the most recently published one, not an arbitrary member."""
+    user = await _user(db_session)
+    s = Story(canonical_title="Multi-source story", summary="sum", topics=["AI"])
+    db_session.add(s)
+    await db_session.flush()
+    now = datetime.now(tz=UTC).replace(microsecond=0)
+    older = Article(
+        title="older",
+        url=f"https://e.com/{uuid.uuid4().hex}",
+        source="Wire A",
+        story_id=s.id,
+        published_at=now - timedelta(hours=5),
+    )
+    freshest = Article(
+        title="freshest",
+        url=f"https://e.com/{uuid.uuid4().hex}",
+        source="Wire B",
+        story_id=s.id,
+        published_at=now,
+    )
+    db_session.add_all([older, freshest])
+    await db_session.flush()
+
+    resp = await client.get("/api/v1/feed", headers={"X-User-Id": str(user.id)})
+    item = resp.json()["items"][0]
+    assert item["article_count"] == 2
+    assert item["primary_article_id"] == str(freshest.id)
 
 
 async def test_bad_cursor_is_422(client, db_session):
