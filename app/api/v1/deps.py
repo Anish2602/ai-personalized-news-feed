@@ -34,8 +34,11 @@ from app.vector.client import vector_store
 SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 
 
-def get_user_service(session: SessionDep) -> UserService:
-    return UserService(UserRepository(session))
+def get_user_service(
+    session: SessionDep,
+    feed_cache: Annotated[FeedCache, Depends(get_feed_cache)],
+) -> UserService:
+    return UserService(UserRepository(session), feed_cache)
 
 
 def get_article_service(session: SessionDep) -> ArticleService:

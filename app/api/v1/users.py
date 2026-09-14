@@ -48,3 +48,8 @@ async def list_interests(user_id: UUID, service: UserServiceDep) -> list[UserInt
         UserInterestRead(name=link.interest.name, weight=link.weight, created_at=link.created_at)
         for link in links
     ]
+
+
+@router.delete("/{user_id}/interests/{interest_name}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_interest(user_id: UUID, interest_name: str, service: UserServiceDep) -> None:
+    await service.remove_interest(user_id, interest_name)

@@ -52,3 +52,16 @@ class UserRepository(BaseRepository):
             .order_by(UserInterest.created_at)
         )
         return list(result.scalars().all())
+
+    async def delete_user_interest(self, *, user_id: UUID, name: str) -> bool:
+        result = await self.session.execute(
+            select(UserInterest)
+            .join(Interest)
+            .where(UserInterest.user_id == user_id, Interest.name == name)
+        )
+        link = result.scalar_one_or_none()
+        if link is None:
+            return False
+        await self.session.delete(link)
+        await self.session.flush()
+        return True

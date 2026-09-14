@@ -58,3 +58,28 @@ async def test_assign_and_list_interests(client):
     listed = (await client.get(f"/api/v1/users/{user_id}/interests")).json()
     weights = {i["name"]: i["weight"] for i in listed}
     assert weights == {"Cloud": 5.0, "AI": 1.5}
+
+
+async def test_remove_interest(client):
+    user_id = (
+        await client.post("/api/v1/users", json={"email": "d@example.com", "name": "D"})
+    ).json()["id"]
+    await client.post(
+        f"/api/v1/users/{user_id}/interests",
+        json={"items": [{"name": "Cloud", "weight": 2.0}, {"name": "AI", "weight": 1.5}]},
+    )
+
+    resp = await client.delete(f"/api/v1/users/{user_id}/interests/Cloud")
+    assert resp.status_code == 204
+
+    listed = (await client.get(f"/api/v1/users/{user_id}/interests")).json()
+    assert {i["name"] for i in listed} == {"AI"}
+
+
+async def test_remove_missing_interest_is_404(client):
+    user_id = (
+        await client.post("/api/v1/users", json={"email": "e@example.com", "name": "E"})
+    ).json()["id"]
+    resp = await client.delete(f"/api/v1/users/{user_id}/interests/Cloud")
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "not_found"

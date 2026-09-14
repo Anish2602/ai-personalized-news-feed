@@ -23,7 +23,7 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST'
+  method?: 'GET' | 'POST' | 'DELETE'
   body?: unknown
   userId?: string
   params?: Record<string, string | number | boolean | undefined>
@@ -72,6 +72,11 @@ export const api = {
 
   assignInterests: (userId: string, items: { name: string; weight: number }[]) =>
     request<UserInterest[]>(`/users/${userId}/interests`, { method: 'POST', body: { items } }),
+
+  removeInterest: (userId: string, name: string) =>
+    request<void>(`/users/${userId}/interests/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    }),
 
   getFeed: (
     userId: string,

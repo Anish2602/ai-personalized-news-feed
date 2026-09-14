@@ -39,6 +39,19 @@ export function InterestsPanel({ userId, onClose }: { userId: string; onClose: (
     }
   }
 
+  const removeInterest = async (name: string) => {
+    setSaving(name)
+    setError(null)
+    try {
+      await api.removeInterest(userId, name)
+      setInterests((prev) => prev.filter((i) => i.name !== name))
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not remove that interest.')
+    } finally {
+      setSaving(null)
+    }
+  }
+
   const activeNames = new Set(interests.map((i) => i.name))
   const suggestions = taxonomy.filter((t) => !activeNames.has(t))
 
@@ -69,7 +82,17 @@ export function InterestsPanel({ userId, onClose }: { userId: string; onClose: (
           ) : (
             interests.map((i) => (
               <Badge key={i.name} tone="indigo">
-                {i.name}
+                <span className="inline-flex items-center gap-1">
+                  {i.name}
+                  <button
+                    onClick={() => removeInterest(i.name)}
+                    disabled={saving !== null}
+                    aria-label={`Remove ${i.name}`}
+                    className="text-indigo-500 hover:text-indigo-800 disabled:opacity-50"
+                  >
+                    {saving === i.name ? '…' : '✕'}
+                  </button>
+                </span>
               </Badge>
             ))
           )}
